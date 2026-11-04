@@ -22,6 +22,7 @@ from review_logic import load_review_source, prepare_reviews, reconcile_reviews,
 from anomaly_logic import (read_anomalies, prepare_anomalies, combine_anomalies,
                            with_verdicts, filter_anomalies, ANOMALY_CHOICES)
 from action_plan_logic import promoter_summary, diagnostic
+from pdv_search import supervisor_label, matching_poc_ids, select_poc_rows
 from management_store import (read_events as store_read_events, append_events, last_value,
                               configured as management_configured)
 
@@ -74,6 +75,8 @@ def table(frame, height=360):
     if frame is None or frame.empty:
         st.info('Sin registros para los filtros elegidos.'); return
     data=frame.copy().head(100)
+    if 'Supervisor' in data.columns:
+        data['Supervisor'] = data['Supervisor'].map(supervisor_label)
     for col in data.columns:
         if col.startswith('% '):
             data[col]=data[col].apply(lambda v:pct(v) if pd.notna(v) else '—')
@@ -104,6 +107,47 @@ def image_card(url,promoter,detail,subtitle=''):
     def esc(s):return html.escape(str(s or ''),quote=True)
     url=esc(url)
     return f'<div class="photo"><a href="{url}" target="_blank" rel="noopener noreferrer"><img loading="lazy" referrerpolicy="no-referrer" src="{url}" alt="Evidencia"></a><p><strong>{esc(promoter)}</strong> · {esc(subtitle)}</p><p>{esc(str(detail)[:155])}</p><a href="{url}" target="_blank" rel="noopener noreferrer">Ampliar imagen</a></div>'
+
+
+def build_review_lookup(review_rows):
+    lookup_task = {}
+    lookup_photo = {}
+    if review_rows is None or len(review_rows) == 0:
+        return lookup_task, lookup_photo
+    data = review_rows.copy()
+    if 'ID Tarea' in data.columns:
+        data['__task_key__'] = data['ID Tarea'].astype(str).str.strip()
+    else:
+        data['__task_key__'] = ''
+    if 'FotoURL' in data.columns:
+        data['__photo_key__'] = data['FotoURL'].astype(str).str.strip()
+    else:
+        data['__photo_key__'] = ''
+    for _, row in data.iterrows():
+        label = str(row.get('Estado_revision','') or '').strip()
+        if not label or label == 'Sin dictamen':
+            continue
+        task_key = str(row.get('__task_key__','')).strip()
+        photo_key = str(row.get('__photo_key__','')).strip()
+        if task_key and task_key.lower() != 'nan':
+            lookup_task[task_key] = label
+        if photo_key and photo_key.lower() != 'nan':
+            lookup_photo[photo_key] = label
+    return lookup_task, lookup_photo
+
+
+def reviewed_status_label(row, lookup_task, lookup_photo):
+    base = str(row.get('Estado','') or '').strip()
+    task_key = str(row.get('ID Tarea','') or '').strip()
+    photo_key = str(row.get('FotoURL','') or '').strip()
+    review_label = lookup_task.get(task_key) or lookup_photo.get(photo_key)
+    if not review_label:
+        return base
+    if review_label == 'Falla de algoritmo':
+        return f'{base} · Falla de algoritmo' if base else 'Falla de algoritmo'
+    if review_label == 'Inválida confirmada':
+        return f'{base} · Inválida confirmada' if base else 'Inválida confirmada'
+    return f'{base} · {review_label}' if base else review_label
 
 
 @st.cache_data(show_spinner=False,ttl=60)
@@ -247,7 +291,11 @@ cols=st.columns(5)
 selections={}
 for col,(label,field) in zip(cols[:4],filter_opts):
     with col:
-        selections[field]=st.multiselect(label,sorted(df[field].fillna('').unique().tolist()),placeholder='Todos',key=f'flt_{month}_{field}')
+        opts=sorted(df[field].fillna('').unique().tolist())
+        if field == 'Supervisor':
+            selections[field]=st.multiselect(label,opts,format_func=supervisor_label,placeholder='Todos',key=f'flt_{month}_{field}')
+        else:
+            selections[field]=st.multiselect(label,opts,placeholder='Todos',key=f'flt_{month}_{field}')
 with cols[4]:
     available_days=sorted(df['Fecha_dt'].dropna().dt.date.unique().tolist())
     specific_day=st.selectbox('Día específico',['Todo el mes', *available_days],format_func=label_day,key=f'flt_{month}_specific_day')
@@ -262,7 +310,26 @@ s=stats(f)
 if specific_day != 'Todo el mes':
     st.caption('Filtro de fecha activo: ' + label_day(specific_day))
 
-sections=['Resumen','Promotores','Revisiones','Anomalías','Planes de acción','Fotografías','Cierre mensual']
+review_lookup_task = {}
+review_lookup_photo = {}
+try:
+    reviews_for_display = read_tickets()
+    if reviews_for_display is not None and not getattr(reviews_for_display, 'empty', True):
+        if selections['Pilar de la Liga']:
+            reviews_for_display = reviews_for_display[reviews_for_display['Pilar de la Liga'].isin(selections['Pilar de la Liga'])]
+        if selections['Promotor']:
+            reviews_for_display = reviews_for_display[reviews_for_display['Promotor'].isin(selections['Promotor'])]
+        if selections['Supervisor']:
+            reviews_for_display = reviews_for_display[reviews_for_display['Supervisor'].isin(selections['Supervisor'])]
+        if selections['Canal Agrupado']:
+            reviews_for_display = reviews_for_display[reviews_for_display['Canal Agrupado'].isin(selections['Canal Agrupado'])]
+        if specific_day != 'Todo el mes' and 'Fecha_dt' in reviews_for_display.columns:
+            reviews_for_display = reviews_for_display[reviews_for_display['Fecha_dt'].dt.date.eq(specific_day)]
+        review_lookup_task, review_lookup_photo = build_review_lookup(reviews_for_display)
+except Exception:
+    review_lookup_task, review_lookup_photo = {}, {}
+
+sections=['Resumen','Promotores','Buscar cliente / PDV','Revisiones','Anomalías','Planes de acción','Fotografías','Cierre mensual']
 section=st.radio('Sección',sections,horizontal=True,label_visibility='collapsed',key='selected_section')
 
 # Diferido: únicamente consultar tickets/anomalías/eventos al entrar en la sección.
@@ -323,6 +390,81 @@ elif section == 'Promotores':
     with st.expander('Ver detalle por pilar'):
         p=group_summary(f,['Promotor','Pilar de la Liga']).sort_values(['Promotor','% Validación'])
         table(p[['Promotor','Pilar de la Liga','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=420)
+
+elif section == 'Buscar cliente / PDV':
+    st.subheader('Consulta de tareas y fotografías por cliente')
+    st.caption('Escribí el código de cliente/PDV (columna POC ID). La búsqueda usa el mes elegido y respeta los filtros superiores. El código debe coincidir exactamente para no mezclar distintos PDV.')
+    with st.form('search_pdv', clear_on_submit=False):
+        c1,c2=st.columns([3,1])
+        with c1:
+            entered_code=st.text_input('Código del cliente / PDV', placeholder='Ingresá el código del punto de venta',key='pdv_entered_code')
+        with c2:
+            st.write('')
+            submitted=st.form_submit_button('Buscar cliente',use_container_width=True)
+    if submitted:
+        st.session_state['pdv_confirmed_query']=entered_code.strip()
+    search_term=st.session_state.get('pdv_confirmed_query','').strip()
+    if not search_term:
+        st.info('Ingresá un código de PDV y presioná Buscar cliente para ver sus tareas del período.')
+    else:
+        exact,suggestions=matching_poc_ids(f['POC ID'].dropna(),search_term)
+        selected_poc=None
+        if exact:
+            selected_poc=exact[0]
+        elif suggestions:
+            st.warning('No hay coincidencia exacta. Elegí un código sugerido; no se mezclarán clientes.')
+            selected_poc=st.selectbox('Códigos de PDV que contienen ese texto',suggestions,key='pdv_suggestion')
+        else:
+            month_exact,_=matching_poc_ids(df['POC ID'].dropna(),search_term)
+            if month_exact:
+                st.warning('El cliente existe en el mes, pero alguno de los filtros superiores (incluido Día específico) excluye sus tareas. Ajustá los filtros.')
+            else:
+                st.warning('No se encontraron tareas para ese código en el mes seleccionado.')
+        if selected_poc is not None:
+            client=select_poc_rows(f,selected_poc)
+            if client.empty:
+                st.info('Sin tareas para la combinación seleccionada.')
+            else:
+                client=client.sort_values(['Fecha_dt','Pilar de la Liga','ID Tarea'],ascending=[False,True,True]).reset_index(drop=True)
+                result=stats(client)
+                st.markdown(f'**PDV {html.escape(str(selected_poc))}** · {n(len(client))} tareas en la selección')
+                cells=st.columns(5)
+                for cell,label,value in zip(cells,['Asignadas','Validadas','Inválidas','Justificadas','Con foto'],[
+                    n(result['Tareas']),n(result['Validadas']),n(result['Inválidas']),n(result['Justificadas']),n(client['FotoURL'].fillna('').ne('').sum())
+                ]):
+                    cell.metric(label,value)
+                st.markdown('**Resultados por pilar**')
+                by_pillar=group_summary(client,'Pilar de la Liga')
+                table(by_pillar[['Pilar de la Liga','Tareas','Validadas','Inválidas','Justificadas','Pendientes','% Validación']],height=230)
+                st.markdown('**Todas las tareas asignadas a este PDV**')
+                cols_detail=['Fecha_etiqueta','Pilar de la Liga','Detalle Tarea','Estado','Promotor','Supervisor','ID Tarea']
+                view=client[cols_detail].copy().rename(columns={'Fecha_etiqueta':'Fecha','Pilar de la Liga':'Pilar','Detalle Tarea':'Tarea'})
+                table(view,height=430)
+                st.download_button('Exportar tareas del cliente (CSV)', data=client[cols_detail].to_csv(index=False,sep=';').encode('utf-8-sig'),
+                                   file_name=f'tareas_pdv_{month}_{str(selected_poc).replace("/","-")}.csv',mime='text/csv',key='pdv_csv')
+                st.markdown('**Fotografías de las tareas**')
+                if archived:
+                    see_photos=st.toggle('Habilitar fotos de este PDV del mes cerrado',value=False,key=f'pdv_closed_photos_{month}')
+                else:
+                    see_photos=st.toggle('Mostrar fotografías de este PDV',value=True,key='pdv_show_photos')
+                photo_rows=client[client['FotoURL'].fillna('').ne('')].reset_index(drop=True)
+                if not see_photos:
+                    st.caption(f'{n(len(photo_rows))} fotos registradas. Activá el interruptor para visualizarlas.')
+                elif photo_rows.empty:
+                    st.info('El archivo no registra fotografías para estas tareas.')
+                else:
+                    per_page=9
+                    pages=max(1,(len(photo_rows)+per_page-1)//per_page)
+                    page=st.number_input('Página de fotos del cliente',min_value=1,max_value=pages,value=1,step=1,key='pdv_photo_page')
+                    st.caption(f'{n(len(photo_rows))} fotos disponibles · Página {page}/{pages}. Hacé clic en cada imagen para ampliarla.')
+                    photos=photo_rows.iloc[(page-1)*per_page:page*per_page]
+                    for i in range(0,len(photos),3):
+                        columns=st.columns(3)
+                        for column,(_,photo_row) in zip(columns,photos.iloc[i:i+3].iterrows()):
+                            with column:
+                                status_text = reviewed_status_label(photo_row, review_lookup_task, review_lookup_photo)
+                                subtitle=f"{photo_row['Fecha_etiqueta']} · {photo_row['Pilar de la Liga']} · {status_text} · {supervisor_label(photo_row['Supervisor'])}"
+                                st.markdown(image_card(photo_row['FotoURL'],photo_row['Promotor'],photo_row['Detalle Tarea'],subtitle),unsafe_allow_html=True)
 
 elif section == 'Revisiones':
     st.subheader('Revisión de inválidas · Cierre proyectado')
@@ -479,7 +621,9 @@ elif section == 'Fotografías':
         for i in range(0,len(rows),3):
             c=st.columns(3)
             for cell,(_,row) in zip(c,rows.iloc[i:i+3].iterrows()):
-                with cell:st.markdown(image_card(row['FotoURL'],row['Promotor'],row['Detalle Tarea'],row['Estado']),unsafe_allow_html=True)
+                with cell:
+                    status_text = reviewed_status_label(row, review_lookup_task, review_lookup_photo)
+                    st.markdown(image_card(row['FotoURL'],row['Promotor'],row['Detalle Tarea'],status_text),unsafe_allow_html=True)
         if photos.empty:st.info('No hay fotos para estos filtros.')
 
 elif section == 'Cierre mensual':
