@@ -1,983 +1,498 @@
-"""BEES Force | Tablero de gestión de tareas y evidencias.
-Ejecutar: streamlit run app.py
+"""BEES Force · Vista operativa simplificada / cierres compactos.
+
+Streamlit: gráficos por pilar y promotor, filtros superiores, lectura diferida
+por sección y cierres de un archivo que preservan planes/anomalías.
 """
 from __future__ import annotations
-
+import hmac
 import html
 import os
-import hmac
-from pathlib import Path
 from io import BytesIO
-
+from pathlib import Path
 import pandas as pd
 import plotly.express as px
-import plotly.io as pio
 import streamlit as st
 
-pio.templates.default = 'plotly_white'
-tmpl = pio.templates['plotly_white']
-tmpl.layout.font.color = '#000000'
-tmpl.layout.title.font.color = '#000000'
-tmpl.layout.legend.font.color = '#000000'
-
-from drive_source import service as drive_service, folder_id as drive_folder_id, list_monthly, choose, download, auto_close_old, sync_planatareas, current_month, local_monthly_files, list_reviews, local_review_files, auto_close_reviews, list_anomaly_reports, local_anomaly_reports
-
-from review_logic import (load_review_source, prepare_reviews, reconcile_reviews,
-                          filter_reviews, review_metrics, estimated_close, ranking_reviews, REVIEW_COLORS)
-
-from anomaly_logic import (read_anomalies, prepare_anomalies, combine_anomalies, with_verdicts,
-                           filter_anomalies, ANOMALY_CHOICES)
-from management_store import read_events, append_events, last_value, configured as management_configured, spreadsheet_id as management_sheet_id
+from bees_logic import STATUS_COLORS, STATUS_ORDER, load_source, prepare, filter_data, group_summary, stats
+from drive_source import (service as drive_service, folder_id as drive_folder_id, download,
+                          _list_files, _index_monthly, _index_reviews, _index_anomalies,
+                          choose, current_month, local_monthly_files)
+from monthly_snapshot import (build_snapshot, load_snapshot, file_name, index_snapshots)
+from review_logic import load_review_source, prepare_reviews, reconcile_reviews, estimated_close, review_metrics
+from anomaly_logic import (read_anomalies, prepare_anomalies, combine_anomalies,
+                           with_verdicts, filter_anomalies, ANOMALY_CHOICES)
 from action_plan_logic import promoter_summary, diagnostic
+from management_store import (read_events as store_read_events, append_events, last_value,
+                              configured as management_configured)
 
-from bees_logic import (
-    STATUS_COLORS, STATUS_ORDER, filter_data, group_summary,
-    load_source, prepare, stats,
-)
+st.set_page_config(page_title='BEES Force · DDV', page_icon='📊', layout='wide', initial_sidebar_state='collapsed')
 
-st.set_page_config(page_title='BEES Force · Control de tareas', page_icon='📋', layout='wide', initial_sidebar_state='expanded')
-
-st.markdown('''
-<style>
-:root {color-scheme: light;}
-.stApp, [data-testid="stSidebar"] { background: #f7f9fc; }
-.stApp, .stApp p, .stApp label, .stApp span, .stApp div, .stApp h1, .stApp h2, .stApp h3 {color: #182334;}
-h1, h2, h3 {letter-spacing: -.02em;}
-h1 {font-size: 2rem !important;}
-h3 {font-size: 1.1rem !important;}
-[data-testid="stMetric"] {background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 12px; box-shadow: 0px 4px 14px #1e293b0b;}
-[data-testid="stMetricLabel"] * {color: #475569 !important; font-weight: 650;}
-[data-testid="stMetricValue"] * {color: #162436 !important; font-weight: 800;}
-[data-testid="stSidebar"] {border-right: 1px solid #dce5f1;}
-.stTabs [data-baseweb="tab-list"] {gap: 8px;}
-.stTabs [data-baseweb="tab"] {background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; color:#182334 !important;}
-.mini-note {color:#475569; font-size:.88rem; margin-bottom: .9rem;}
-.photo-card {background:#fff; border:1px solid #dde5ef; border-radius:13px; padding:10px; min-height:375px; box-shadow:0 1px 6px #12233a08;}
-.photo-thumb {height:220px; width:100%; background:#edf2f8; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden;}
-.photo-thumb img {display:block; max-width:100%; max-height:100%; width:100%; height:100%; object-fit:contain;}
-.photo-placeholder {display:flex; align-items:center; justify-content:center; height:220px; background:#f1f5f9; border-radius:8px; color:#64748b; font-size:.95rem;}
-.photo-small {margin:.45rem 0 .2rem; font-size:.82rem; color:#475569;}
-.photo-task {font-size:.87rem; line-height:1.34; min-height:58px; max-height:85px; overflow:hidden; color:#19283a;}
-.status-pill {display:inline-block; font-size:.76rem; font-weight:700; padding:3px 9px; border-radius:100px; margin-right:6px;}
-.photo-action {font-size:.82rem; font-weight:700; color:#000; text-decoration:underline;}
-/* Fuente negra en toda la aplicación */
-.stApp, .stApp :is(p, span, label, h1, h2, h3, h4, h5, h6, li, td, th, small, strong, em,
-  div, button, a, input, textarea, option, code, pre),
-[data-testid="stSidebar"] :is(p, span, label, h1, h2, h3, h4, h5, h6, div, button, a, input, textarea),
-[data-baseweb="popover"] *, [data-baseweb="menu"] *, [role="listbox"] *,
-[data-testid="stMetricLabel"] *, [data-testid="stMetricValue"] *,
-.js-plotly-plot svg text, .js-plotly-plot svg tspan,
-.stApp input::placeholder, .stApp textarea::placeholder { color: #000000 !important; }
-.stApp input, .stApp textarea,
-.stApp [data-baseweb="input"], .stApp [data-baseweb="select"],
-.stApp [data-baseweb="textarea"],
-[data-testid="stFileUploaderDropzone"],
-[data-testid="stFileUploaderDropzone"] button,
-[data-testid="stDataFrame"], [data-testid="stDataEditor"],
-[data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"] {
-    background-color: #ffffff !important;
-}
-.stApp :is(button, [data-baseweb="button"]),
-[data-testid="stSidebar"] :is(button, [data-baseweb="button"]) {
-    color: #000000 !important;
-    background-color: #e5effb !important;
-    border-color: #c5d3e6 !important;
-}
-.stApp button * { color: #000000 !important; }
-.stApp [data-testid="stTabs"] [role="tab"] {
-    color: #000000 !important;
-    background-color: #ffffff !important;
-}
-.stApp [data-testid="stFileUploaderDropzone"] {border: 1px dashed #9baec5 !important;}
-/* Filtros laterales más prolijos */
-section[data-testid="stSidebar"] [data-baseweb="select"] > div,
-section[data-testid="stSidebar"] [data-baseweb="input"] > div {
-    border-radius: 14px !important;
-    border: 1px solid #d9e2ef !important;
-    background: #ffffff !important;
-    min-height: 46px !important;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04) !important;
-}
-section[data-testid="stSidebar"] [data-baseweb="tag"] {
-    background: #e8f1ff !important;
-    border: 1px solid #bfd4f5 !important;
-    border-radius: 999px !important;
-    color: #17324f !important;
-    padding: 2px 8px !important;
-}
-section[data-testid="stSidebar"] [data-baseweb="tag"] span {color:#17324f !important;}
-section[data-testid="stSidebar"] [data-baseweb="tag"] button {
-    background: transparent !important;
-    border: none !important;
-    min-height: auto !important;
-    padding: 0 0 0 4px !important;
-}
-section[data-testid="stSidebar"] [data-baseweb="tag"] svg,
-section[data-testid="stSidebar"] [data-baseweb="select"] svg {
-    fill: #334155 !important;
-    color: #334155 !important;
-}
-section[data-testid="stSidebar"] label {font-weight: 700 !important; color:#213247 !important;}
-/* Tablas tipo dashboard */
-.dash-table-card {
-    background: #ffffff;
-    border: 1px solid #dbe4f0;
-    border-radius: 18px;
-    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-    overflow: auto;
-    padding: 8px;
-}
-.dash-table {width: 100%; border-collapse: separate; border-spacing: 0; font-size: .92rem;}
-.dash-table thead th {
-    position: sticky; top: 0; z-index: 1;
-    background: linear-gradient(180deg, #f3f7fc 0%, #edf3fa 100%);
-    color: #182334;
-    text-align: left;
-    padding: 12px 14px;
-    border-bottom: 1px solid #dbe4f0;
-    font-weight: 700;
-    white-space: nowrap;
-}
-.dash-table tbody td {
-    background: #ffffff;
-    color: #243447;
-    padding: 11px 14px;
-    border-bottom: 1px solid #edf2f7;
-    vertical-align: top;
-}
-.dash-table tbody tr:hover td {background: #f8fbff;}
-.dash-table tbody tr:last-child td {border-bottom: none;}
-.dash-table thead th:first-child {border-top-left-radius: 12px;}
-.dash-table thead th:last-child {border-top-right-radius: 12px;}
-</style>
-''', unsafe_allow_html=True)
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def _process_files(named_bytes):
-    frames=[]
-    for name, content in named_bytes:
-        frames.append(load_source(BytesIO(content), filename=name))
-    return prepare(pd.concat(frames, ignore_index=True))
+st.markdown('''<style>
+:root {color-scheme:light}
+.stApp {background:#f7f9fc; color:#111827}
+.stApp, .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
+.stApp button, .stApp input, .stApp textarea, .stApp span {color:#111827}
+h1 {font-size:2rem !important; letter-spacing:-.04em}
+h2, h3 {letter-spacing:-.025em}
+[data-testid="stMetric"] {background:#fff;border:1px solid #e1e8f1;border-radius:16px;padding:16px;box-shadow:0 4px 20px #101d3209}
+[data-testid="stMetricLabel"] *, [data-testid="stMetricValue"] * {color:#111827 !important}
+.stButton button, .stDownloadButton button {border-radius:11px; border:1px solid #d4e0ef; background:#eff6ff; color:#111827}
+[data-baseweb="select"] > div, [data-baseweb="input"] > div {background:#fff !important;border:1px solid #d6e2ef !important;border-radius:12px !important}
+[data-baseweb="tag"] {background:#e7f0fd !important;color:#153b67 !important; border-radius:20px !important}
+[data-baseweb="tag"] * {color:#153b67 !important}
+[data-baseweb="popover"] *, [role="listbox"] * {color:#111827 !important}
+.dash-table-wrap {border:1px solid #e3eaf3; background:#fff;border-radius:16px;padding:7px;box-shadow:0 4px 18px #1723340a;overflow:auto}
+.dash-table {border-collapse:separate;border-spacing:0;width:100%;font-size:.89rem}
+.dash-table th {position:sticky;top:0;background:#eef4fb;color:#18283c;text-align:left;padding:12px;white-space:nowrap;font-weight:750}
+.dash-table td {border-bottom:1px solid #edf1f6;padding:11px 12px;color:#263548;background:#fff}
+.dash-table tr:last-child td {border-bottom:0}
+.dash-table tr:hover td {background:#f7fbff}
+.photo {background:#fff;border:1px solid #e3eaf3;border-radius:16px;padding:12px;margin-bottom:14px}
+.photo img {display:block;width:100%;height:205px;object-fit:contain;background:#eef3f9;border-radius:10px}
+.photo p {font-size:.85rem;margin:8px 0;color:#263548}
+.photo a {font-weight:700;color:#17507b;text-decoration:underline}
+[data-testid="stRadio"] [role="radiogroup"] {gap:10px}
+[data-testid="stRadio"] label {background:#fff;border:1px solid #e1e8f1;border-radius:13px;padding:7px 11px}
+</style>''', unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=240, show_spinner=False)
-def _download_from_drive_cached(file_id: str, modified: str) -> bytes:
-    connection = drive_service(st.secrets)
-    return download(connection, file_id)
+def n(v): return f'{int(v):,}'.replace(',','.')
+def pct(v): return f'{float(v)*100:.1f}%'.replace('.',',')
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def _parse_review_cached(name: str, data: bytes, period: str = ''):
-    raw = load_review_source(BytesIO(data), filename=name)
-    # Una sola planilla Q4: octubre/noviembre/diciembre en pestañas diferentes.
-    # Mes_revision usa la Fecha de fila cuando existe, o el mes de la hoja.
-    if period and 'Mes_revision' in raw.columns:
-        raw = raw.loc[raw['Mes_revision'].eq(period)].copy()
-    return prepare_reviews(raw)
+def table(frame, height=360):
+    if frame is None or frame.empty:
+        st.info('Sin registros para los filtros elegidos.'); return
+    data=frame.copy().head(100)
+    for col in data.columns:
+        if col.startswith('% '):
+            data[col]=data[col].apply(lambda v:pct(v) if pd.notna(v) else '—')
+    data=data.fillna('')
+    rows=data.to_html(index=False,escape=True,classes='dash-table')
+    st.markdown(f'<div class="dash-table-wrap" style="max-height:{height}px">{rows}</div>',unsafe_allow_html=True)
+    if len(frame)>100:st.caption('Se muestran los primeros 100 registros. Aplicá filtros para acotar la lista.')
 
 
-
-@st.cache_data(show_spinner=False, ttl=900)
-def _parse_anomalies_cached(name: str, data: bytes, base: pd.DataFrame):
-    raw=read_anomalies(BytesIO(data),name=name)
-    return prepare_anomalies(raw,base,source=name)
-
-@st.cache_data(show_spinner=False, ttl=45)
-def _management_events_cached():
-    return read_events(st.secrets)
-
-
-def anomaly_image_card(row):
-    esc=lambda x:html.escape(str(x),quote=True)
-    url=esc(row['FotoURL']); task=esc(row['Detalle Tarea'])
-    return f'''<div class="photo-card" style="min-height:320px">
-      <a href="{url}" target="_blank" rel="noopener noreferrer" title="Abrir foto en tamaño completo">
-        <div class="photo-thumb"><img src="{url}" alt="Foto señalada por el reporte BEES" loading="lazy" referrerpolicy="no-referrer"></div>
-      </a><div class="photo-small"><b>{esc(row['Promotor'])}</b> · {esc(row['Supervisor'])}<br>
-      {esc(row['Fecha_etiqueta'])} · {esc(row['Pilar de la Liga'])} · PDV {esc(row['POC ID'])}</div>
-      <div class="photo-task" title="{task}">{task}</div>
-      <a class="photo-action" href="{url}" target="_blank" rel="noopener noreferrer">Ampliar fotografía</a></div>'''
-
-
-def editor_passphrase():
-    val=os.getenv('BEES_EDITOR_PASSWORD','').strip()
-    if not val:
-        try:val=str(st.secrets.get('BEES_EDITOR_PASSWORD','')).strip()
-        except Exception:pass
-    return val
-
-def number(n): return f'{int(n):,}'.replace(',', '.')
-def percent(v): return f'{100 * v:.1f}%'.replace('.', ',')
-
-
-def display_table(frame: pd.DataFrame, *, height=400):
-    frame = frame.copy()
-    for c in ['% Validación','% Invalidación','% Justificación','% fallas entre revisadas']:
-        if c in frame.columns:
-            frame[c] = frame[c].map(percent)
-    frame = frame.fillna('')
-    html_table = frame.to_html(index=False, escape=True, classes='dash-table')
-    st.markdown(f'<div class="dash-table-card" style="max-height:{height}px">{html_table}</div>', unsafe_allow_html=True)
-
-
-def status_chart(grouped, key, heading, height=380, top=None):
-    if grouped.empty:
-        st.info('Sin datos para este segmento.'); return
-    data=grouped.sort_values('Tareas', ascending=False)
-    if top: data=data.head(top)
-    # La tabla original ya contiene la columna agregada «Tareas».
-    # pandas.melt no permite que value_name coincida con una columna existente.
-    long = data.melt(id_vars=[key], value_vars=['Validadas','Inválidas','Justificadas','Pendientes'], var_name='Estado', value_name='Cantidad')
-    long['Estado'] = long['Estado'].map({'Validadas':'Validada','Inválidas':'Inválida','Justificadas':'Justificada','Pendientes':'Pendiente'})
-    fig=px.bar(long, x=key, y='Cantidad', color='Estado', title=heading, barmode='stack',
-               color_discrete_map=STATUS_COLORS,
-               category_orders={'Estado':STATUS_ORDER},
-               hover_data={'Cantidad':True})
-    fig.update_layout(height=height, margin=dict(l=12,r=10,t=55,b=20),
-                     xaxis_title='',yaxis_title='Cantidad de tareas',
-                     title=dict(text=heading, font=dict(color='#000000', size=20)),
-                     legend_title='', legend=dict(orientation='h',y=1.12,x=0, font=dict(color='#000000')),
-                     paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#000000',size=12))
-    fig.update_xaxes(tickangle=-30, showgrid=False)
-    fig.update_yaxes(gridcolor='#e8eef5')
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar':False})
-
-
-def rank_chart(frame:pd.DataFrame, name_col:str, metric:str, heading:str, *, ascending=False, limit=14):
-    if frame.empty:
-        st.info('Sin datos');return
-    data=frame.sort_values([metric,'Completadas'],ascending=[ascending,False]).head(limit).copy()
-    data=data.iloc[::-1]
-    fig=px.bar(data,x=metric,y=name_col,orientation='h',title=heading,
-               text=metric,color_discrete_sequence=[('#dc2626' if metric=='Inválidas' else '#15803d')])
-    fig.update_traces(textposition='outside',cliponaxis=False)
-    fig.update_layout(margin=dict(l=5,r=32,t=55,b=12),height=max(320,55+36*len(data)),
-        title=dict(text=heading, font=dict(color='#000000', size=20)),
-        paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
-        xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'))
-    fig.update_xaxes(gridcolor='#e8eef5')
+def chart(frame,key,title,*, horizontal=False):
+    if frame is None or frame.empty:return
+    top=frame.sort_values('Enviadas (oficial)',ascending=False).head(20).copy()
+    vals=top.melt(id_vars=[key],value_vars=['Validadas','Inválidas','Justificadas'],var_name='Estado',value_name='Cantidad')
+    axis={'y':key,'x':'Cantidad'} if horizontal else {'x':key,'y':'Cantidad'}
+    fig=px.bar(vals,**axis,color='Estado',barmode='stack',orientation='h' if horizontal else 'v',
+               color_discrete_map={'Validadas':'#15803d','Inválidas':'#dc2626','Justificadas':'#d97706'})
+    fig.update_layout(title=dict(text=title,font=dict(color='#111827',size=17)),
+        height=max(320,40*len(top)+100) if horizontal else 370,
+        font=dict(color='#111827',size=12),legend=dict(orientation='h',y=1.17,title=''),
+        margin=dict(l=4,r=6,t=75,b=8),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
+        xaxis_title='' if not horizontal else 'Cantidad',yaxis_title='' if horizontal else 'Tareas')
+    fig.update_xaxes(tickfont=dict(color='#111827'),title_font=dict(color='#111827'))
+    fig.update_yaxes(tickfont=dict(color='#111827'),title_font=dict(color='#111827'))
     st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
 
 
-def photo_card(row):
-    u=str(row['FotoURL']) if row['FotoURL'] else ''
-    esc = lambda x: html.escape(str(x),quote=True)
-    tag=str(row['Estado']); color=STATUS_COLORS.get(tag,'#64748b')
-    p=esc(row['Promotor']); task=esc(row['Detalle Tarea']); dt=esc(row['Fecha_etiqueta']);
-    pillar=esc(row['Pilar de la Liga']); sup=esc(row['Supervisor']); poc=esc(row['POC ID']);
-    bono=' · BONUS fuera de KPI' if row['Bonus_excluida_bool'] else (' · BONUS validada' if row['Bonus_bool'] else '')
-    if u:
-        url=esc(u)
-        pic=f'<a href="{url}" target="_blank" rel="noopener noreferrer" title="Clic para ampliar la fotografía en tamaño completo"><div class="photo-thumb"><img src="{url}" alt="Evidencia de tarea BEES Force" loading="lazy" referrerpolicy="no-referrer"></div></a>'
-        action=f'<a class="photo-action" href="{url}" target="_blank" rel="noopener noreferrer">Ampliar fotografía</a>'
-    else:
-        pic='<div class="photo-placeholder">Sin fotografía de ejecución</div>'
-        action='<span style="font-size:.82rem;color:#64748b">El origen indica “No aplica”</span>'
-    return f'''<div class="photo-card">{pic}
-      <div class="photo-small"><span class="status-pill" style="background:{color}19;color:{color}">{esc(tag)}</span> {dt} · {pillar}{bono}</div>
-      <div class="photo-small"><b>{p}</b> · {sup} · PDV {poc}</div>
-      <div class="photo-task" title="{task}">{task}</div>{action}</div>'''
-
-st.title('BEES Force · Tablero de tareas')
-st.caption('Control de ejecución, validación, justificaciones y evidencias fotográficas · Distribuidora del Valle')
-
-with st.sidebar:
-    st.header('Origen de datos')
-    st.caption('Leemos planatareas.xlsx y los tickets/anomalías con sus nombres habituales. Los CIERRE se conservan por mes.')
-
-    try:
-        drive = drive_service(st.secrets)
-    except Exception as exc:
-        drive = None
-        st.error('No se pudo conectar a Google Drive: ' + str(exc))
-
-    availability = {}
-    auto_closed = []
-    if drive is not None:
-        try:
-            folder = drive_folder_id(st.secrets)
-            # SOLO LECTURA de la carpeta Drive: las cuentas de servicio no tienen
-            # cuota de almacenamiento en Mi unidad. files.copy daba error 403.
-            # No se crea ningún cierre automáticamente con estas credenciales.
-            availability = list_monthly(drive, folder, read_bytes=_download_from_drive_cached)
-        except Exception as exc:
-            st.error('Problema con la carpeta Drive: ' + str(exc))
-            availability = {}
-    else:
-        local_months = local_monthly_files(Path(__file__).parent / 'data')
-        availability = {month:{state:[{'id':str(path),'name':path.name}] for state,path in items.items()} for month,items in local_months.items()}
-        st.caption('Sin credenciales Drive: modo local /data. Para Render configurá la cuenta de servicio.')
-
-    months = sorted(availability, reverse=True)
-    current = current_month()
-    if months:
-        # En noviembre mostrará noviembre si está; en otro caso el último cierre y aviso explícito.
-        default_idx = months.index(current) if current in months else 0
-        month = st.selectbox('Mes para analizar',months,index=default_idx,format_func=lambda m: pd.Timestamp(m+'-01').strftime('%m/%Y'))
-        item = choose(availability,month)
-        is_closed = bool(availability[month].get('CIERRE'))
-        st.caption(('🔒 Cierre congelado' if is_closed else '🔄 Mes en curso / fuente ACTUAL') + f' · {item["name"]}')
-        if not is_closed:
-            if month != current:
-                st.warning('Este mes aún no tiene un CIERRE guardado. Su contenido podría cambiar. Guardá una copia de la bajada en Drive antes de reemplazarla.')
-            elif item.get('_origin') == 'planatareas':
-                st.caption('Sin cierre automático en Mi unidad: al finalizar el mes, conservá una copia de la bajada antes de reemplazar planatareas.xlsx.')
-        if month != current and current not in availability:
-            st.caption('Todavía no hay archivo para ' + current + '. Se muestra el último mes disponible.')
-        try:
-            if drive is not None:
-                # Caché por ID + modificación, para refrescar al cambiar el archivo ACTUAL en Drive.
-                data = _download_from_drive_cached(item['id'], item.get('modifiedTime',''))
-            else:
-                data = Path(item['id']).read_bytes()
-            files = ((item['name'],data),)
-        except Exception as exc:
-            st.error('No se pudo descargar el período seleccionado: ' + str(exc))
-            files = None
-    else:
-        files = None
-
-    st.divider()
-    st.caption('Cargar una bajada manualmente permite previsualizar sin modificar Drive ni cierres.')
-    manual = st.file_uploader('Previsualizar archivo Excel (opcional)',type=['xlsx','xlsm','csv'],accept_multiple_files=False)
-    if manual is not None:
-        files = ((manual.name,manual.getvalue()),)
-        st.warning('Vista previa manual. Esta carga no se guarda ni sobrescribe el cierre en Google Drive.')
-    st.divider()
-
-if files is None:
-    st.info('No hay bajadas disponibles. Subí **planatareas.xlsx** a la carpeta de Drive, o cargá una vista previa manual. Los cierres anteriores se reconocen automáticamente.')
-    st.stop()
-
-try:
-    df,quality=_process_files(files)
-except Exception as exc:
-    st.error(f'No fue posible leer los datos: {exc}')
-    st.stop()
-
-if manual is None and months:
-    actual_months=df['Fecha_dt'].dropna().dt.strftime('%Y-%m').unique().tolist()
-    if actual_months != [month]:
-        st.error(f'El archivo {item["name"]} no contiene exclusivamente tareas de {month}. Períodos detectados: {actual_months}. Revisá la bajada antes de analizarla.')
-        st.stop()
-
-st.caption(f'Período analizado: {month if manual is None and months else "Vista previa manual"}')
-
-# Las revisiones del período se leen por separado; nunca alteran df ni el KPI oficial.
-review_rows = None
-review_quality = None
-review_file_name = None
-review_is_closed = False
-with st.sidebar:
-    st.divider()
-    st.header('Tickets revisados')
-    st.caption('Se cargan por el mismo mes seleccionado. Su dictamen modifica solo el cierre proyectado.')
-    r_manual = st.file_uploader('Previsualizar archivo de tickets (opcional)',type=['xlsx','xlsm','csv'],key='review_manual')
-    try:
-        if r_manual is not None:
-            rb = r_manual.getvalue()
-            review_file_name = r_manual.name
-            st.caption('Vista previa: no modifica el archivo de Drive.')
-        elif months and manual is None:
-            if drive is not None:
-                r_availability = list_reviews(drive, folder, read_bytes=_download_from_drive_cached)
-                # Los tickets Q4 son multimes. NO copiar el Excel trimestral:
-                # la lectura no debe crear un archivo en Mi unidad (error 403).
-            else:
-                r_availability = local_review_files(Path(__file__).parent / 'data')
-            if month in r_availability:
-                ri = choose(r_availability, month)
-                review_is_closed = bool(r_availability[month].get('CIERRE'))
-                review_file_name = ri['name']
-                rb = (_download_from_drive_cached(ri['id'],ri.get('modifiedTime',''))
-                      if drive is not None else Path(ri['id']).read_bytes())
-                st.caption(('🔒 Revisión cerrada' if review_is_closed else '🔄 Revisión en seguimiento') + ' · '+review_file_name)
-            else:
-                rb = None
-                st.caption('Sin tickets cargados para el mes elegido.')
-        else:
-            rb = None
-        if rb is not None:
-            review_rows, review_quality = _parse_review_cached(review_file_name,rb,month if months and manual is None else '')
-    except Exception as exc:
-        review_rows = None
-        st.error('No se pudieron leer los tickets: '+str(exc))
+def image_card(url,promoter,detail,subtitle=''):
+    def esc(s):return html.escape(str(s or ''),quote=True)
+    url=esc(url)
+    return f'<div class="photo"><a href="{url}" target="_blank" rel="noopener noreferrer"><img loading="lazy" referrerpolicy="no-referrer" src="{url}" alt="Evidencia"></a><p><strong>{esc(promoter)}</strong> · {esc(subtitle)}</p><p>{esc(str(detail)[:155])}</p><a href="{url}" target="_blank" rel="noopener noreferrer">Ampliar imagen</a></div>'
 
 
+@st.cache_data(show_spinner=False,ttl=60)
+def catalog(folder):
+    svc=drive_service(st.secrets)
+    return _list_files(svc,folder)
 
-# Informes de anomalías semanales y bitácora de dictámenes / objetivos / planes.
-anomaly_rows=None
-anomaly_sources=[]
-management_events=None
-with st.sidebar:
-    st.divider()
-    st.header('Anomalías semanales')
-    try:
-        if months and manual is None:
-            found=(list_anomaly_reports(drive,folder,read_bytes=_download_from_drive_cached) if drive is not None
-                   else local_anomaly_reports(Path(__file__).parent/'data'))
-            anomaly_sources=found.get(month,[])
-        st.caption(f'{len(anomaly_sources)} reporte(s) disponibles del período elegido.')
-    except Exception as exc:
-        st.error('No se pudo listar los reportes de anomalías: '+str(exc))
-    preview_anomalies=st.file_uploader('Previsualizar anomalías (opcional)',type=['xlsx','xlsm','csv'],
-                                      accept_multiple_files=True,key='anomaly_manual')
-    st.divider()
-    st.header('Edición de seguimiento')
-    secret=editor_passphrase()
-    key_entered=st.text_input('Clave de editor',type='password',key='bees_editor_secret',
-                             help='Necesaria para clasificar anomalías, fijar objetivos y guardar planes. No es una autenticación completa del sitio.')
-    editor_name=st.text_input('Nombre o iniciales del revisor',key='bees_editor_name',
-                              placeholder='Ej.: Supervisor 2')
-    key_ok=bool(secret and key_entered and hmac.compare_digest(key_entered,secret))
-    can_edit=bool(key_ok and editor_name.strip())
+
+@st.cache_data(show_spinner=False,ttl=180)
+def indexed_months(metadata):
+    return _index_monthly(metadata,drive_service(st.secrets),read_bytes=file_bytes)
+
+
+@st.cache_data(show_spinner=False,ttl=180)
+def indexed_reviews(metadata):
+    return _index_reviews(metadata,drive_service(st.secrets),read_bytes=file_bytes)
+
+
+@st.cache_data(show_spinner=False,ttl=180)
+def indexed_anomalies(metadata):
+    return _index_anomalies(metadata,drive_service(st.secrets),read_bytes=file_bytes)
+
+
+@st.cache_data(show_spinner=False,ttl=3600)
+def parsed_snapshot(blob,month):
+    return load_snapshot(blob,expected_month=month)
+
+
+@st.cache_data(show_spinner=False,ttl=270)
+def file_bytes(fid,modified=''):
+    svc=drive_service(st.secrets)
+    return download(svc,fid)
+
+
+@st.cache_data(show_spinner=False,ttl=3600)
+def parsed_tasks(name,blob):
+    return prepare(load_source(BytesIO(blob),filename=name))[0]
+
+
+@st.cache_data(show_spinner=False,ttl=3600)
+def parsed_review(name,blob,month):
+    data=load_review_source(BytesIO(blob),filename=name)
+    if 'Mes_revision' in data:
+        data=data[data['Mes_revision'].eq(month)].copy()
+    return prepare_reviews(data)[0]
+
+
+@st.cache_data(show_spinner=False,ttl=3600)
+def parsed_anomaly(name,blob,base):
+    return prepare_anomalies(read_anomalies(BytesIO(blob),name=name),base,source=name)
+
+
+@st.cache_data(show_spinner=False,ttl=600)
+def events_cached():
+    return store_read_events(st.secrets)
+
+
+def editor_password():
+    secret=os.environ.get('BEES_EDITOR_PASSWORD','').strip()
     if not secret:
-        st.caption('Edición deshabilitada: faltó configurar BEES_EDITOR_PASSWORD en Render.')
-    elif can_edit:
-        st.success('Edición habilitada para esta sesión.')
-    elif key_entered and not key_ok:
-        st.error('Clave de editor incorrecta.')
-    elif key_ok and not editor_name.strip():
-        st.caption('Ingresá tu identificación para dejar constancia de quién hace los cambios.')
+        try:secret=str(st.secrets.get('BEES_EDITOR_PASSWORD','')).strip()
+        except Exception:pass
+    return secret
 
-# Diagnóstico de escritura: los datos de las tareas pueden leerse desde Drive
-# aunque Google Sheets API esté deshabilitada o falten permisos sobre «Eventos».
-management_error=None
+
+st.title('BEES Force · Ejecución DDV')
+st.caption('Seguimiento por pilar y promotor · Cierres históricos con planes y anomalías')
+
+manual = None
 try:
-    management_credentials_ready=management_configured(st.secrets)
-    if management_credentials_ready:
-        management_events=_management_events_cached()
-    else:
-        management_events=None
-        management_error='No hay una cuenta de servicio válida para Google Sheets.'
+    svc=drive_service(st.secrets)
+    root=drive_folder_id(st.secrets)
+    files=catalog(root) if svc is not None else []
+    months_available=indexed_months(files) if svc is not None else {}
+    snapshots=index_snapshots(files)
 except Exception as exc:
-    management_events=None
-    management_error=str(exc)
+    st.error('No se pudo consultar la carpeta de Google Drive: '+str(exc))
+    svc=None;files=[];months_available={};snapshots={}
 
-with st.sidebar:
-    st.markdown('**Estado del guardado**')
-    if management_error:
-        st.error('Guardado bloqueado: no se pudo leer la planilla de gestión. Revisá Google Sheets API y los permisos.')
-        # Los mensajes técnicos pueden contener IDs internos: solo para el editor autenticado.
-        if key_ok:
-            with st.expander('Ver detalle del error de Google Sheets'):
-                st.code(management_error,language=None)
-                st.caption('Comprobá Google Sheets API en Google Cloud, permiso Editor sobre la hoja de gestión y que Render use la clave JSON vigente.')
-    elif not secret:
-        st.error('Guardado bloqueado: falta BEES_EDITOR_PASSWORD en Render.')
-    elif not key_ok:
-        st.info('Para guardar: ingresá la clave de editor de Render en el campo superior.')
-    elif not editor_name.strip():
-        st.info('Para guardar: completá tu nombre o iniciales como revisor.')
-    else:
-        st.success('Google Sheets conectado y edición habilitada. Ya podés guardar dictámenes, objetivos y planes.')
+months=sorted(set(months_available)|set(snapshots),reverse=True)
+now=current_month()
+with st.container(border=True):
+    left,right=st.columns([2.5,1])
+    with left:
+        if months:
+            month=st.selectbox('Mes',months,index=months.index(now) if now in months else 0,
+                               format_func=lambda v:pd.Timestamp(v+'-01').strftime('%m/%Y'))
+        else:
+            month=now
+            st.warning('No hay meses detectados en Drive. Podés usar la previsualización manual.')
+    with right:
+        if st.button('↻ Actualizar Drive',use_container_width=True):
+            catalog.clear();file_bytes.clear();indexed_months.clear();indexed_reviews.clear();indexed_anomalies.clear();events_cached.clear();st.rerun()
+    with st.expander('Carga manual y acceso de edición',expanded=False):
+        manual=st.file_uploader('Previsualizar planatareas.xlsx (no guarda en Drive)',type=['xlsx','xlsm','csv'])
+        e1,e2=st.columns(2)
+        with e1:passphrase=st.text_input('Clave de editor',type='password')
+        with e2:editor_name=st.text_input('Nombre del revisor',placeholder='Ej.: Supervisor 2')
+        st.caption('Los datos y contraseñas no se incluyen en GitHub. Las clasificaciones y planes se guardan en Google Sheets.')
 
-if months and manual is None:
+secret=editor_password()
+can_edit=bool(secret and passphrase and editor_name.strip() and hmac.compare_digest(secret,passphrase))
+source=None
+archived=False
+archive=None
+if manual is not None:
+    source={'name':manual.name,'id':'manual'}
+    tasks_blob=manual.getvalue()
+    df=parsed_tasks(source['name'],tasks_blob)
+    period=df['Fecha_dt'].dropna().dt.strftime('%Y-%m').unique().tolist()
+    month=period[0] if len(period)==1 else now
+    st.warning('Vista previa manual: no reemplaza ningún dato de Drive.')
+elif month in snapshots:
+    archived=True
+    source=snapshots[month]
     try:
-        frames=[]
-        for ai in anomaly_sources:
-            payload=(_download_from_drive_cached(ai['id'],ai.get('modifiedTime',''))
-                     if drive is not None else Path(ai['id']).read_bytes())
-            frames.append(_parse_anomalies_cached(ai['name'],payload,df))
-        if preview_anomalies:
-            for afile in preview_anomalies:
-                frames.append(_parse_anomalies_cached(afile.name,afile.getvalue(),df))
-        if frames:
-            anomaly_rows=combine_anomalies(frames,df)
-            anomaly_rows=anomaly_rows[anomaly_rows['Fecha_dt'].dt.strftime('%Y-%m').eq(month)].copy()
+        archive=parsed_snapshot(file_bytes(source['id'],source.get('modifiedTime','')),month)
+        df=archive['tasks']
     except Exception as exc:
-        st.warning('No se pudo procesar un reporte de anomalías: '+str(exc))
+        st.error('No se pudo abrir el cierre consolidado: '+str(exc));st.stop()
+elif month in months_available:
+    source=choose(months_available,month)
+    try:
+        df=parsed_tasks(source['name'],file_bytes(source['id'],source.get('modifiedTime','')))
+    except Exception as exc:
+        st.error('Error al leer las tareas: '+str(exc));st.stop()
 else:
-    try:
-        if preview_anomalies:
-            frames=[_parse_anomalies_cached(x.name,x.getvalue(),df) for x in preview_anomalies]
-            anomaly_rows=combine_anomalies(frames,df)
-    except Exception as exc:
-        st.warning('No se pudo procesar la previsualización de anomalías: '+str(exc))
-
+    st.info('Subí planatareas.xlsx a la carpeta de Drive.');st.stop()
 
 if df.empty:
-    st.warning('El archivo no contiene ID de tarea válidos.'); st.stop()
+    st.warning('No hay tareas en el período seleccionado.');st.stop()
+if manual is None and not archived:
+    actual=df['Fecha_dt'].dropna().dt.strftime('%Y-%m').unique().tolist()
+    if actual!=[month]:
+        st.error(f'El archivo no corresponde solo a {month}: {actual}');st.stop()
 
-with st.sidebar:
-    st.header('Filtros globales')
-    ds=sorted(df['Distri/Directa'].unique().tolist())
-    distributors=st.multiselect('Distribuidor',ds,default=ds if len(ds)==1 else [])
-    channels=st.multiselect('Canal (K+T / AS / REF)',sorted(df['Canal Agrupado'].unique().tolist()),placeholder='Todos')
-    pillars=st.multiselect('Pilar',sorted(df['Pilar de la Liga'].unique().tolist()),placeholder='Todos')
-    sups=st.multiselect('Supervisor',sorted(df['Supervisor'].unique().tolist()),placeholder='Todos')
-    pros=st.multiselect('Promotor',sorted(df['Promotor'].unique().tolist()),placeholder='Todos')
-    variables=st.multiselect('Variable de la Liga',sorted(df['Variable de la Liga'].unique().tolist()),placeholder='Todas')
-    states=st.multiselect('Estado',STATUS_ORDER,placeholder='Todos')
-    clean_dates=df['Fecha_dt'].dropna()
-    date_selection=None
-    if not clean_dates.empty:
-        first,last=clean_dates.min().date(),clean_dates.max().date()
-        date_selection=st.date_input('Desde / Hasta',value=(first,last),min_value=first,max_value=last,format='DD/MM/YYYY')
-    query=st.text_input('Buscar texto en tarea',placeholder='Ej.: POP EXTERNO')
-    poc=st.text_input('Buscar ID de PDV',placeholder='Ej.: 0705490')
-    st.caption('Selección vacía = todas las opciones del filtro.')
+st.caption(('🔒 Cierre consolidado' if archived else '● Mes en seguimiento')+' · '+month+' · '+source['name'])
 
-f=filter_data(df,distributors,pillars,sups,pros,variables,states,date_selection,query,poc,channels=channels)
+filter_opts=[('Canal (opcional)','Canal Agrupado'),('Pilar','Pilar de la Liga'),('Supervisor','Supervisor'),('Promotor','Promotor')]
+cols=st.columns(4)
+selections={}
+for col,(label,field) in zip(cols,filter_opts):
+    with col:
+        selections[field]=st.multiselect(label,sorted(df[field].fillna('').unique().tolist()),placeholder='Todos',key=f'flt_{month}_{field}')
+
+f=filter_data(df,distributors=None,channels=selections['Canal Agrupado'],
+              pillars=selections['Pilar de la Liga'],supervisors=selections['Supervisor'],
+              promoters=selections['Promotor'],variables=None,states=None,dates=None)
+if f.empty:
+    st.warning('No hay tareas para los filtros seleccionados.');st.stop()
 s=stats(f)
 
-all_reviews = None
-filtered_reviews = None
-if review_rows is not None:
-    try:
-        all_reviews = reconcile_reviews(df, review_rows)
-        filtered_reviews = filter_reviews(
-            all_reviews, distributors=distributors, channels=channels,
-            pillars=pillars, supervisors=sups, promoters=pros,
-            variables=variables, states=states, dates=date_selection,
-            text_q=query, poc_q=poc)
-    except Exception as exc:
-        st.error('El cruce de revisiones no pudo completarse: '+str(exc))
+sections=['Resumen','Promotores','Revisiones','Anomalías','Planes de acción','Fotografías','Cierre mensual']
+section=st.radio('Sección',sections,horizontal=True,label_visibility='collapsed',key='selected_section')
+
+# Diferido: únicamente consultar tickets/anomalías/eventos al entrar en la sección.
+def read_tickets():
+    if archived:return archive['reviews']
+    if svc is None or manual is not None:return None
+    mapping=indexed_reviews(files)
+    if month not in mapping:return None
+    item=choose(mapping,month)
+    rows=parsed_review(item['name'],file_bytes(item['id'],item.get('modifiedTime','')),month)
+    return reconcile_reviews(df,rows)
 
 
-filtered_anomalies=None
-if anomaly_rows is not None:
-    try:
-        with_decisions=with_verdicts(anomaly_rows,management_events)
-        filtered_anomalies=filter_anomalies(with_decisions,
-            distributors=distributors,channels=channels,pillars=pillars,
-            supervisors=sups,promoters=pros,variables=variables,states=states,
-            dates=date_selection,text_q=query,poc_q=poc)
-    except Exception as exc:
-        st.warning('No se pudieron filtrar las anomalías: '+str(exc))
+def get_events():
+    if archived:return archive['events']
+    if not management_configured(st.secrets):return pd.DataFrame()
+    return events_cached()
 
-if f.empty:
-    st.warning('No hay tareas que cumplan con los filtros seleccionados.'); st.stop()
 
-k=st.columns(4)
-for col,label in zip(k,['Enviadas (oficial)','Validadas','Inválidas','Justificadas']):
-    col.metric(label,number(s[label]))
-other=st.columns(4)
-for col,label in zip(other,['Tareas','Completadas','Pendientes','Bonus excluidas']):
-    col.metric(label,number(s[label]))
-st.markdown(f'<div class="mini-note"><b>Validación oficial: {percent(s["% Validación"])}</b> (validadas / enviadas computables) · Ejecución bruta: {percent(s["% Completadas"])} (completadas / registros) · Invalidación operativa: {percent(s["% Invalidación"])} (inválidas / completadas) · Justificación: {percent(s["% Justificación"])} (justificadas / registros). Las BONUS no validadas no entran en “Enviadas”, pero permanecen en el análisis operativo.</div>',unsafe_allow_html=True)
+def read_anomalies_for_month(ev):
+    if archived:return archive['anomalies']
+    if svc is None or manual is not None:return None
+    mapping=indexed_anomalies(files)
+    selected=mapping.get(month,[])
+    if not selected:return None
+    frames=[]
+    for item in selected:
+        data=parsed_anomaly(item['name'],file_bytes(item['id'],item.get('modifiedTime','')),df)
+        frames.append(data)
+    merged=combine_anomalies(frames,df)
+    merged=merged.loc[merged['Fecha_dt'].dt.strftime('%Y-%m').eq(month)].copy()
+    return with_verdicts(merged,ev)
 
-overview,reviews_tab,anomalies_tab,action_plans_tab,segmentation,ranking,actions,photos,details=st.tabs([
-    'Resumen general','Revisión de inválidas','Anomalías','Plan de acción',
-    'Pilar · Supervisor','Ranking promotores','Tareas críticas','Galería de fotos','Detalle y exportación'
-])
 
-with overview:
-    st.subheader('Rendimiento oficial por canal')
-    by_channel=group_summary(f,'Canal Agrupado')
-    display_table(by_channel.sort_values('Enviadas (oficial)',ascending=False),height=240)
-    st.caption('La tasa de validación se calcula con las tareas enviadas computables. Las justificaciones y las invalidaciones incluyen también BONUS fuera del KPI oficial; se conservan para control.')
-    by_pillar=group_summary(f,'Pilar de la Liga')
-    a,b=st.columns([1.3,1])
+if section == 'Resumen':
+    k=st.columns(4)
+    for c,label,value in zip(k,['Validación oficial','Enviadas','Validadas','Inválidas'],
+                             [pct(s['% Validación']),n(s['Enviadas (oficial)']),n(s['Validadas']),n(s['Inválidas'])]):
+        c.metric(label,value)
+    a,b=st.columns([1.25,1])
     with a:
-        status_chart(by_pillar,'Pilar de la Liga','Distribución de resultados por pilar',380)
+        st.subheader('Pilares')
+        p=group_summary(f,'Pilar de la Liga').sort_values('% Validación',ascending=True)
+        chart(p,'Pilar de la Liga','Ejecución por pilar')
     with b:
-        pie=px.pie(pd.DataFrame({'Estado':STATUS_ORDER,'Cantidad':[s['Validadas'],s['Inválidas'],s['Justificadas'],s['Pendientes']]}),
-                   names='Estado',values='Cantidad',hole=.58,title='Composición total',color='Estado',color_discrete_map=STATUS_COLORS)
-        pie.update_layout(height=380,margin=dict(l=10,r=10,t=55,b=8),title=dict(text='Composición total', font=dict(color='#000000', size=20)), legend_title='', legend=dict(font=dict(color='#000000')), paper_bgcolor='rgba(0,0,0,0)',font=dict(color='#000000'))
-        pie.update_traces(textfont_color='#ffffff', textfont_size=16)
-        st.plotly_chart(pie,use_container_width=True,config={'displayModeBar':False})
-    st.subheader('Indicadores por pilar')
-    display_table(by_pillar.sort_values('Tareas',ascending=False),height=220)
-    st.subheader('Supervisor · Resultado')
-    by_sup=group_summary(f,'Supervisor')
-    status_chart(by_sup,'Supervisor','Volumen de tareas por supervisor',340)
-    display_table(by_sup.sort_values('Supervisor'),height=210)
+        st.subheader('Resultado de pilares')
+        table(p[['Pilar de la Liga','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=330)
+    st.caption('Las BONUS no validadas se excluyen de enviadas oficiales; permanecen en el control operativo.')
 
-with segmentation:
-    st.subheader('Resultados por canal y pilar')
-    by_cp=group_summary(f,['Canal Agrupado','Pilar de la Liga'])
-    display_table(by_cp.sort_values(['Canal Agrupado','Pilar de la Liga']),height=270)
-    st.subheader('Resultados combinados por pilar y supervisor')
-    group=group_summary(f,['Pilar de la Liga','Supervisor'])
-    display_table(group.sort_values(['Pilar de la Liga','Supervisor']),height=310)
-    status_chart(group.assign(Segmento=group['Pilar de la Liga']+' · '+group['Supervisor']),'Segmento','Distribución por pilar × supervisor',390)
-    st.subheader('Resultados por promotor y pilar')
-    gp=group_summary(f,['Pilar de la Liga','Supervisor','Promotor'])
-    display_table(gp.sort_values(['Pilar de la Liga','Inválidas'],ascending=[True,False]),height=450)
+elif section == 'Promotores':
+    g=group_summary(f,['Supervisor','Promotor']).sort_values('% Validación',ascending=True)
+    c=st.columns(3)
+    c[0].metric('Promotores',n(g['Promotor'].nunique()))
+    c[1].metric('Pilar más débil',str(group_summary(f,'Pilar de la Liga').sort_values('% Validación').iloc[0]['Pilar de la Liga']))
+    c[2].metric('Inválidas',n(s['Inválidas']))
+    st.subheader('Resultados por promotor')
+    table(g[['Supervisor','Promotor','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=550)
+    with st.expander('Ver detalle por pilar'):
+        p=group_summary(f,['Promotor','Pilar de la Liga']).sort_values(['Promotor','% Validación'])
+        table(p[['Promotor','Pilar de la Liga','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=420)
 
-with ranking:
-    st.subheader('Ranking de promotores')
-    st.caption('Los rankings de cantidad miden volumen. Las tasas permiten comparar promotores con cargas de trabajo distintas.')
-    pillars_rank=['Todos los pilares']+sorted(f['Pilar de la Liga'].unique().tolist())
-    pillar_sel=st.selectbox('Pilar para el ranking',pillars_rank, key='ranking_pillar')
-    rf=f if pillar_sel=='Todos los pilares' else f[f['Pilar de la Liga']==pillar_sel]
-    gr=group_summary(rf,'Promotor')
-    a,b=st.columns(2)
-    with a:rank_chart(gr,'Promotor','Inválidas','Mayor cantidad de tareas inválidas')
-    with b:rank_chart(gr,'Promotor','Validadas','Mayor cantidad de tareas validadas')
-    st.markdown('**Ranking de tasa de invalidación** (solo promotores con al menos 10 tareas completadas)')
-    enough=gr[gr['Completadas']>=10].sort_values(['% Invalidación','Inválidas'],ascending=False)
-    display_table(enough[['Promotor','Completadas','Validadas','Inválidas','% Validación','% Invalidación','Justificadas','% Justificación']],height=400)
-    st.subheader('Ranking por cada pilar')
-    all_pillars=sorted(f['Pilar de la Liga'].unique().tolist())
-    if all_pillars:
-        for tab,pil in zip(st.tabs(all_pillars),all_pillars):
-            with tab:
-                gpp=group_summary(f[f['Pilar de la Liga']==pil],'Promotor')
-                cols=st.columns(2)
-                with cols[0]:rank_chart(gpp,'Promotor','Inválidas',f'Inválidas · {pil}')
-                with cols[1]:rank_chart(gpp,'Promotor','Validadas',f'Validadas · {pil}')
-                display_table(gpp.sort_values('Inválidas',ascending=False),height=350)
-
-with actions:
-    st.subheader('¿Qué tareas se invalidan más?')
-    tasks=group_summary(f,['Pilar de la Liga','Variable de la Liga','Detalle Tarea'])
-    minimum=st.number_input('Mínimo de tareas completadas para evaluar tasas',min_value=1,max_value=300,value=10,step=1,
-                            help='Solo afecta el ranking por porcentaje; no oculta tareas del ranking por cantidad.')
-    namecols=['Pilar de la Liga','Variable de la Liga','Detalle Tarea','Tareas','Completadas','Validadas','Inválidas','% Invalidación','Justificadas']
-    a,b=st.columns(2)
-    with a:
-        st.markdown('**Más inválidas — cantidad**')
-        display_table(tasks.sort_values(['Inválidas','Completadas'],ascending=False)[namecols].head(15),height=430)
-    with b:
-        st.markdown('**Mayor tasa de invalidación**')
-        rate=tasks[tasks['Completadas']>=minimum].sort_values(['% Invalidación','Inválidas'],ascending=False)
-        display_table(rate[namecols].head(15),height=430)
-    st.subheader('¿Qué tareas se justifican más?')
-    display_table(tasks.sort_values(['Justificadas','Tareas'],ascending=False)[namecols].head(20),height=420)
-    st.subheader('Motivos de justificación')
-    reasons=f[f['Justificada_bool']].groupby(['Justificacion Motivo'],dropna=False).size().reset_index(name='Justificaciones').sort_values('Justificaciones',ascending=False)
-    left,right=st.columns([1.3,1])
-    with left:
-        if not reasons.empty:
-            fig=px.bar(reasons.iloc[::-1],x='Justificaciones',y='Justificacion Motivo',orientation='h',
-                       title='Motivos registrados',text='Justificaciones',color_discrete_sequence=['#d97706'])
-            fig.update_layout(height=max(320,65+30*len(reasons)),margin=dict(l=10,r=22,t=48,b=5),
-                              title=dict(text='Motivos registrados', font=dict(color='#000000', size=20)),
-                              xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'),
-                              paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
-            fig.update_xaxes(gridcolor='#e8eef5')
-            st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
-        else:st.info('No hay justificaciones en la selección.')
-    with right:display_table(reasons,height=420)
-
-with photos:
-    st.subheader('Galería de evidencias fotográficas')
-    st.caption('Miniatura completa sin recorte. Hacé clic en la imagen para abrirla ampliada en otra pestaña. El enlace depende de los permisos y vigencia del servidor BEES Force.')
-    a,b,c=st.columns([1.2,1.3,1])
-    with a:
-        photo_status=st.selectbox('Estado en galería',['Todas']+STATUS_ORDER,index=2,key='gallery_status')
-    with b:
-        only_photos=st.checkbox('Solo con fotografía',value=True)
-    with c:
-        page_size=st.selectbox('Imágenes por página',[9,12,18,24],index=1)
-    pf=f
-    if photo_status!='Todas':pf=pf[pf['Estado']==photo_status]
-    if only_photos:pf=pf[pf['FotoURL']!='']
-    pf=pf.sort_values(['Fecha_dt','Promotor'],ascending=[False,True]).reset_index(drop=True)
-    n=len(pf); total_pages=max(1,(n+page_size-1)//page_size)
-    pg=st.number_input(f'Página (de {total_pages})',min_value=1,max_value=total_pages,value=1,step=1)
-    st.markdown(f'**{number(n)} tareas** coinciden con los filtros de la galería. Página {pg}/{total_pages}.')
-    subset=pf.iloc[(pg-1)*page_size:pg*page_size]
-    if subset.empty:st.info('No hay imágenes para mostrar con estos filtros.')
+elif section == 'Revisiones':
+    st.subheader('Revisión de inválidas · Cierre proyectado')
+    try:r=read_tickets()
+    except Exception as exc:st.error('No se pudieron leer los tickets: '+str(exc));r=None
+    if r is None or r.empty:st.info('Aún no hay tickets para este mes.')
     else:
-        cols=st.columns(3)
-        for i,(_,item) in enumerate(subset.iterrows()):
-            with cols[i%3]: st.markdown(photo_card(item),unsafe_allow_html=True)
-    st.info('Las evidencias no se descargan ni se copian a GitHub: se muestran directamente desde el enlace del Excel. Si el servidor bloquea o vence el enlace, la miniatura tampoco estará disponible.')
+        r=r[(r['Pilar de la Liga'].isin(selections['Pilar de la Liga']) if selections['Pilar de la Liga'] else True) &
+            (r['Promotor'].isin(selections['Promotor']) if selections['Promotor'] else True) &
+            (r['Supervisor'].isin(selections['Supervisor']) if selections['Supervisor'] else True) &
+            (r['Canal Agrupado'].isin(selections['Canal Agrupado']) if selections['Canal Agrupado'] else True)].copy()
+        result=estimated_close(f,r);rm=review_metrics(r)
+        m=st.columns(3)
+        m[0].metric('Validación oficial',pct(result['porcentaje_oficial']))
+        m[1].metric('Fallas recuperables',n(result['recuperaciones_adicionales']))
+        m[2].metric('Cierre proyectado',pct(result['porcentaje_estimado']))
+        st.caption('La proyección solo suma fallas de algoritmo que todavía figuran inválidas. No altera el oficial.')
+        table(r[['Promotor','Pilar de la Liga','Detalle Tarea','Estado_revision','Conciliacion']].sort_values('Promotor'),height=440)
 
-with reviews_tab:
-    st.subheader('Revisión de inválidas · Cierre anticipado')
-    st.caption('Los tickets revisados entre el 15 y el 23 pueden anticipar correcciones que impactan oficialmente a fin de mes. La proyección suma solo fallas de algoritmo que aún aparecen inválidas en la bajada seleccionada.')
-    if filtered_reviews is None:
-        a,b = st.columns(2)
-        a.metric('Validadas oficiales',number(s['Validadas']))
-        b.metric('% validación oficial',percent(s['% Validación']))
-        st.info('No hay tickets de revisión para el mes seleccionado. Subí el libro trimestral de tickets con las hojas por mes (octubre, noviembre y diciembre) a Drive.')
-    else:
-        rm=review_metrics(filtered_reviews)
-        projection=estimated_close(f, filtered_reviews)
-        st.markdown('**El indicador oficial permanece intacto.** El cierre proyectado usa la misma población filtrada y reconoce las BONUS recuperadas en el denominador.')
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric('Validación oficial',percent(projection['porcentaje_oficial']),help=f"{number(projection['validadas_oficiales'])} / {number(projection['enviadas_oficiales'])} tareas")
-        c2.metric('Fallas recuperables',number(projection['recuperaciones_adicionales']),help='Dictamen Falla de algoritmo y tarea todavía inválida en la bajada. No incluye las ya corregidas.')
-        c3.metric('Cierre proyectado',percent(projection['porcentaje_estimado']),delta=f"{(projection['porcentaje_estimado']-projection['porcentaje_oficial'])*100:+.2f} pp")
-        c4.metric('Validadas proyectadas',number(projection['validadas_estimadas']),help=f"{number(projection['enviadas_estimadas'])} tareas computables proyectadas")
-        st.caption(f"Fórmula: ({number(projection['validadas_oficiales'])} validadas oficiales + {number(projection['recuperaciones_adicionales'])} recuperaciones pendientes) / ({number(projection['enviadas_oficiales'])} enviadas oficiales + {number(projection['bonus_recuperadas'])} BONUS recuperadas). Actualizado a la última bajada disponible; no anticipa ejecuciones futuras ni decisiones todavía no cargadas.")
-        if rm['Revisadas']==0:
-            st.warning('No hay dictámenes de revisión para los filtros seleccionados. El proyectado coincide con la base oficial por falta de recuperaciones acreditadas.')
-        r1,r2,r3,r4,r5=st.columns(5)
-        for slot,label in zip((r1,r2,r3,r4,r5),('Revisadas','Fallas de algoritmo','Inválidas confirmadas','Sin dictamen','Ya validadas')):
-            slot.metric(label,number(rm[label]))
-        if rm['Sin correspondencia'] or rm['Conflictos']:
-            st.warning(f"Hay {number(rm['Sin correspondencia'])} tickets sin correspondencia y {number(rm['Conflictos'])} con dictamen de inválida que aparecen validados en la bajada. Se muestran para control y NO suman al proyectado.")
-        inner1, inner2, inner3, inner4 = st.tabs(['Análisis de revisiones','Ranking de promotores','Fotos revisadas','Detalle y conciliación'])
-        with inner1:
-            decision=st.selectbox('Dictamen de revisión',['Todos','Falla de algoritmo','Inválida confirmada','Sin dictamen'],key='decision_review')
-            rview=filtered_reviews if decision=='Todos' else filtered_reviews[filtered_reviews['Estado_revision']==decision]
-            a,b=st.columns([1,1.4])
-            with a:
-                st.markdown('**Resultado de los tickets**')
-                summary=pd.DataFrame({'Dictamen':['Falla de algoritmo','Inválida confirmada','Sin dictamen'],
-                   'Cantidad':[int(rview['Falla_algoritmo_bool'].sum()),int(rview['Invalida_confirmada_bool'].sum()),int(rview['Sin_dictamen_bool'].sum())]})
-                fig=px.bar(summary, x='Cantidad',y='Dictamen',orientation='h',text='Cantidad',
-                    color='Dictamen',color_discrete_map=REVIEW_COLORS)
-                fig.update_layout(height=300,showlegend=False,margin=dict(l=8,r=18,t=12,b=8),font=dict(color='#000000'),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
-                fig.update_traces(textfont_color='#000000')
-                st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
-            with b:
-                st.markdown('**Por pilar**')
-                rr=ranking_reviews(rview,'Pilar de la Liga')
-                display_table(rr,height=300)
-            st.markdown('**Por supervisor y canal**')
-            display_table(ranking_reviews(rview,['Supervisor','Canal Agrupado']).sort_values('Revisadas',ascending=False),height=330)
-            st.markdown('**Por tarea**')
-            display_table(ranking_reviews(rview,['Pilar de la Liga','Detalle Tarea']).sort_values('Fallas de algoritmo',ascending=False).head(25),height=420)
-        with inner2:
-            rank_pillar=st.selectbox('Pilar del ranking de revisiones',['Todos']+sorted(filtered_reviews['Pilar de la Liga'].dropna().unique().tolist()),key='review_pillar')
-            rr=filtered_reviews if rank_pillar=='Todos' else filtered_reviews[filtered_reviews['Pilar de la Liga']==rank_pillar]
-            rank=ranking_reviews(rr,'Promotor').sort_values(['Fallas de algoritmo','Recuperables'],ascending=False)
-            st.caption('Ranking por cantidad de fallas del algoritmo detectadas; recuperables identifica las que todavía sumarían al cierre proyectado.')
-            a,b=st.columns(2)
-            with a:st.markdown('**Mayor cantidad de fallas de algoritmo**');display_table(rank.head(25),height=460)
-            with b:st.markdown('**Mayor cantidad de inválidas confirmadas**');display_table(rank.sort_values('Inválidas confirmadas',ascending=False).head(25),height=460)
-            st.markdown('**Promotores por pilar (todas las revisiones)**')
-            display_table(ranking_reviews(filtered_reviews,['Pilar de la Liga','Promotor']).sort_values(['Pilar de la Liga','Fallas de algoritmo'],ascending=[True,False]),height=450)
-        with inner3:
-            st.caption('Fotografías de las tareas revisadas: clic para ampliar. Si el enlace está vencido o es privado, puede no mostrarse.')
-            photo_decision=st.selectbox('Dictamen de las fotos',['Todos','Falla de algoritmo','Inválida confirmada','Sin dictamen'],key='photo_review_decision')
-            gallery=filtered_reviews if photo_decision=='Todos' else filtered_reviews[filtered_reviews['Estado_revision']==photo_decision]
-            gallery=gallery[gallery['FotoURL'].astype(str).ne('')].sort_values('Fecha_dt',ascending=False).reset_index(drop=True)
-            per_page=9
-            total_pages=max(1,(len(gallery)+per_page-1)//per_page)
-            page=st.number_input('Página de fotos revisadas',min_value=1,max_value=total_pages,value=1,step=1,key='rev_page')
-            st.caption(f"{number(len(gallery))} fotografías disponibles · Página {page}/{total_pages}")
-            piccols=st.columns(3)
-            for idx,(_,row) in enumerate(gallery.iloc[(page-1)*per_page:page*per_page].iterrows()):
-                with piccols[idx%3]:
-                    photo=dict(row)
-                    photo['Estado']=row['Estado_revision']
-                    st.markdown(photo_card(photo),unsafe_allow_html=True)
-            if gallery.empty:st.info('No hay fotografías disponibles para este criterio.')
-        with inner4:
-            st.markdown('**Conciliación por ID Tarea**')
-            match_choice=st.selectbox('Situación del ticket',['Todas']+sorted(filtered_reviews['Conciliacion'].dropna().unique().tolist()),key='review_match_choice')
-            detail=filtered_reviews if match_choice=='Todas' else filtered_reviews[filtered_reviews['Conciliacion']==match_choice]
-            cols=['Fecha_etiqueta','Canal Agrupado','Pilar de la Liga','Supervisor','Promotor','POC ID','Detalle Tarea',
-                  'ID Tarea','Estado_revision','Estado_origen','Conciliacion','FotoURL']
-            display=detail[cols].rename(columns={'Fecha_etiqueta':'Fecha','Estado_revision':'Dictamen ticket','Estado_origen':'Estado oficial','FotoURL':'Foto'})
-            st.dataframe(display,hide_index=True,use_container_width=True,height=490,column_config={'Foto':st.column_config.LinkColumn('Foto',display_text='Abrir foto')})
-            st.download_button('Exportar revisiones filtradas',data=display.to_csv(index=False,sep=';').encode('utf-8-sig'),file_name='BEES_Force_revisiones_filtradas.csv',mime='text/csv')
-            with st.expander('Control de calidad de los tickets'):
-                st.write('Filas del archivo:',number(review_quality['registros']))
-                st.write('Sin ID Tarea:',number(review_quality['sin_id']))
-                st.write('ID Tarea duplicados retirados:',number(review_quality['duplicados']))
-                st.write('Sin dictamen interpretable:',number(review_quality['sin_dictamen']))
-                st.caption('Los tickets sin correspondencia no modifican el cierre proyectado; revisalos antes de ajustar el origen.')
-
-
-with anomalies_tab:
+elif section == 'Anomalías':
     st.subheader('Anomalías fotográficas · Distribuidora del Valle')
-    st.caption('Solo reportes del distribuidor ID 70549. Se consolidan archivos semanales por foto, sin duplicar imágenes repetidas. La clasificación es manual y no modifica los KPI oficiales ni el cierre proyectado de tickets.')
-    if filtered_anomalies is None:
-        st.info('No hay reporte semanal para este mes. Subí a Drive un BEES_FORCE_ANOMALIAS_YYYY-MM_YYYY-MM-DD.xlsx, o previsualizá un Excel desde la barra lateral.')
+    try:
+        ev=get_events()
+        anomalies=read_anomalies_for_month(ev)
+    except Exception as exc:
+        st.error('No se pudo cargar el relevamiento: '+str(exc));anomalies=None;ev=None
+    if anomalies is None or anomalies.empty:st.info('Este mes todavía no tiene un reporte de anomalías.')
     else:
-        ac=filtered_anomalies.copy()
-        dictamen_filter=st.multiselect('Dictamen de anomalía',ANOMALY_CHOICES,
-                                     default=[],key='anomaly_verdict_filter',placeholder='Todos los dictámenes')
-        if dictamen_filter:ac=ac[ac['Dictamen'].isin(dictamen_filter)]
-        col=st.columns(4)
-        for cell, label, value in zip(col,['Anomalías únicas','Pendientes','Falla de algoritmo','Inválida / Fraude'],[
-                len(ac),int(ac['Dictamen'].eq('Pendiente').sum()),int(ac['Dictamen'].eq('Falla de algoritmo').sum()),
-                int(ac['Dictamen'].isin(['Inválida','Fraude']).sum())]):
-            cell.metric(label,number(value))
-        if not ac.empty:
-            st.markdown('**Ranking por promotor**')
-            ar=ac.groupby(['Promotor','Supervisor'],dropna=False).agg(
-                Anomalías=('Anomalia_key','count'),Pendientes=('Dictamen',lambda s:int(s.eq('Pendiente').sum())),
-                Algoritmo=('Dictamen',lambda s:int(s.eq('Falla de algoritmo').sum())),
-                **{'Inválidas':('Dictamen',lambda s:int(s.eq('Inválida').sum())),
-                   'Fraude':('Dictamen',lambda s:int(s.eq('Fraude').sum()))}).reset_index()
-            st.dataframe(ar.sort_values('Anomalías',ascending=False),hide_index=True,use_container_width=True,height=235)
-            st.markdown('**Fotografías para revisión**')
-            page_size=9
-            ac=ac.sort_values(['Fecha_dt','Promotor'],ascending=[False,True]).reset_index(drop=True)
-            apages=max(1,(len(ac)+page_size-1)//page_size)
-            apage=st.number_input(f'Página de anomalías (1–{apages})',min_value=1,max_value=apages,value=1,key='anom_page')
-            displayed=ac.iloc[(apage-1)*page_size:apage*page_size]
-            for start in range(0,len(displayed),3):
-                group=st.columns(3)
-                for pos,(_,row) in enumerate(displayed.iloc[start:start+3].iterrows()):
-                    with group[pos]:
-                        st.markdown(anomaly_image_card(row),unsafe_allow_html=True)
-                        key=str(row['Anomalia_key'])
-                        with st.form('form_anom_'+key,clear_on_submit=False):
-                            choice=st.selectbox('Dictamen',ANOMALY_CHOICES,
-                                index=ANOMALY_CHOICES.index(row['Dictamen']),key='verdict_'+key)
-                            note=st.text_area('Observación',value=row['Observacion'],
-                                height=84,key='anom_note_'+key,placeholder='Justificación de la clasificación')
-                            saved=st.form_submit_button('Guardar clasificación',use_container_width=True,
-                                disabled=not can_edit or management_events is None or not management_configured(st.secrets))
-                            if saved:
-                                try:
-                                    event={'tipo':'anomalia','mes':row['Fecha_dt'].strftime('%Y-%m'),
-                                        'clave':key,'valor':choice,'detalle':note,'referencia':row['bdrid'],
-                                        'origen':row['Fuente_semanal']}
-                                    if choice=='Fraude' and not note.strip():
-                                        raise ValueError('Para clasificar como Fraude, escribí el motivo en Observación.')
-                                    append_events(st.secrets,[event],username=editor_name)
-                                    _management_events_cached.clear()
-                                    st.success('Clasificación guardada en Drive.')
-                                    st.rerun()
-                                except Exception as exc:st.error('No se guardó: '+str(exc))
-                        st.caption('Origen: '+str(row['Fuente_semanal'])[:120])
-            detailcols=['Fecha_etiqueta','Promotor','Supervisor','Pilar de la Liga','Variable de la Liga',
-                        'Detalle Tarea','Dictamen','Observacion','Estado','POC ID','bdrid',
-                        'Coincide_tarea','Fuente_repeticiones','FotoURL']
-            st.dataframe(ac[detailcols].rename(columns={'FotoURL':'Foto'}),hide_index=True,
-                         use_container_width=True,height=300,
-                         column_config={'Foto':st.column_config.LinkColumn('Foto',display_text='Ampliar')})
-            st.download_button('Exportar anomalías revisadas (CSV)',
-                ac[detailcols].to_csv(index=False,sep=';').encode('utf-8-sig'),
-                file_name=f'BEES_Anomalias_{month}.csv',mime='text/csv')
+        a=filter_anomalies(anomalies,pillars=selections['Pilar de la Liga'],
+            supervisors=selections['Supervisor'],promoters=selections['Promotor'],
+            channels=selections['Canal Agrupado'])
+        m=st.columns(3)
+        m[0].metric('Anomalías',n(len(a)))
+        m[1].metric('Pendientes',n(a['Dictamen'].eq('Pendiente').sum()))
+        m[2].metric('Falla algoritmo',n(a['Dictamen'].eq('Falla de algoritmo').sum()))
+        st.markdown('**Por promotor**')
+        ranking=a.groupby('Promotor',dropna=False).agg(Anomalías=('Anomalia_key','count'),
+            Pendientes=('Dictamen',lambda v:int(v.eq('Pendiente').sum()))).reset_index()
+        table(ranking.sort_values('Anomalías',ascending=False),height=230)
+        if archived:
+            st.caption('Cierre congelado: dictámenes y observaciones tal como estaban al cierre.')
+            table(a[['Promotor','Pilar de la Liga','Detalle Tarea','Dictamen','Observacion']],height=330)
+            enabled=st.toggle('Habilitar fotos de anomalías del cierre',value=False,key=f'anomaly_photos_{month}')
         else:
-            st.info('No hay anomalías para estos filtros.')
+            enabled=True
+            if not can_edit:
+                st.caption('Para clasificar, abrí “Carga manual y acceso de edición” arriba e ingresá clave y nombre.')
+        if enabled:
+            page=st.number_input('Página de fotografías',min_value=1,max_value=max(1,(len(a)+5)//6),value=1)
+            show=a.iloc[(page-1)*6:page*6]
+            for i in range(0,len(show),3):
+                cards=st.columns(3)
+                for c,(_,row) in zip(cards,show.iloc[i:i+3].iterrows()):
+                    with c:
+                        st.markdown(image_card(row['FotoURL'],row['Promotor'],row['Detalle Tarea'],row['Pilar de la Liga']),unsafe_allow_html=True)
+                        st.caption(f"Dictamen: {row['Dictamen']} · {row.get('Observacion','')}")
+                        if not archived:
+                            with st.form('anomaly_'+str(row['Anomalia_key'])):
+                                choice=st.selectbox('Clasificación',ANOMALY_CHOICES,
+                                    index=ANOMALY_CHOICES.index(row['Dictamen']))
+                                note=st.text_area('Observación',value=str(row['Observacion'] or ''))
+                                saved=st.form_submit_button('Guardar',disabled=not can_edit or ev is None)
+                                if saved:
+                                    try:
+                                        if choice=='Fraude' and not note.strip():
+                                            raise ValueError('Para Fraude se requiere una observación.')
+                                        append_events(st.secrets,[{'tipo':'anomalia','mes':month,'clave':str(row['Anomalia_key']),
+                                          'valor':choice,'detalle':note,'referencia':str(row.get('bdrid',''))}],username=editor_name)
+                                        events_cached.clear();st.rerun()
+                                    except Exception as exc:st.error('No se guardó: '+str(exc))
+        st.caption('Las clasificaciones no modifican el resultado oficial; requieren revisión humana.')
+
+elif section == 'Planes de acción':
+    st.subheader('Promotores por debajo del objetivo')
+    try:ev=get_events()
+    except Exception as exc:st.error('No se pudo leer el registro de planes: '+str(exc));ev=None
+    prev=last_value(ev,'objetivo',month) if ev is not None else None
+    try:goal=float(prev['valor']) if prev else 80.0
+    except (ValueError,TypeError):goal=80.0
+    if prev is None and not archived:
+        st.caption('El 80% es un valor de ejemplo. Indicá y guardá el objetivo real de este mes.')
+    goal=st.number_input('Objetivo del mes (%)',min_value=0.0,max_value=100.0,value=goal,step=0.5,
+                         disabled=archived,key=f'goal_{month}')
+    if archived:
+        st.caption('Objetivo y planes guardados dentro del cierre. Esta vista es de solo lectura.')
+    elif st.button('Guardar objetivo',disabled=not can_edit or ev is None):
+        try:
+            append_events(st.secrets,[{'tipo':'objetivo','mes':month,'clave':'global','valor':goal}],username=editor_name)
+            events_cached.clear();st.rerun()
+        except Exception as exc:st.error('No se guardó el objetivo: '+str(exc))
+    summary=promoter_summary(f)
+    below=summary[(summary['Resultado']<goal/100) & summary['Enviadas'].gt(0)].copy()
+    k=st.columns(3)
+    k[0].metric('Meta',f'{goal:.1f}%'.replace('.',','))
+    k[1].metric('Promotores bajo meta',n(len(below)))
+    k[2].metric('Evaluados',n(len(summary)))
+    plans={}
+    if ev is not None and not ev.empty:
+        p=ev[(ev['tipo']=='plan') & (ev['mes']==month)].drop_duplicates('clave',keep='last')
+        plans=dict(zip(p['clave'],p['valor']))
+    if below.empty:
+        st.success('No hay promotores por debajo del objetivo con los filtros seleccionados.')
+    else:
+        view=below[['bdrid','Promotor','Supervisor','Enviadas','Validadas','Inválidas','Resultado']].copy()
+        view['Resultado']=view['Resultado'].map(pct)
+        view['Causa principal']=[diagnostic(f,b,goal/100)['texto'] for b in below['bdrid']]
+        view['Plan de acción']=below['bdrid'].map(plans).fillna('')
+        if archived:
+            table(view[['Promotor','Supervisor','Enviadas','Validadas','Inválidas','Resultado','Causa principal','Plan de acción']],height=480)
+        else:
+            with st.form('edit_plans'):
+                edited=st.data_editor(view,hide_index=True,use_container_width=True,
+                    disabled=[c for c in view if c!='Plan de acción'],
+                    column_config={'Plan de acción':st.column_config.TextColumn('Plan de acción',width='large'),
+                                   'Causa principal':st.column_config.TextColumn('Causa principal',width='large')},
+                    height=min(600,100+len(view)*42),key='plan_grid')
+                saved=st.form_submit_button('Guardar planes',disabled=not can_edit or ev is None)
+                if saved:
+                    changes=[]
+                    for i in range(len(edited)):
+                        rid=str(view.iloc[i]['bdrid']);val=str(edited.iloc[i]['Plan de acción']).strip()
+                        if val!=str(plans.get(rid,'')).strip():
+                            changes.append({'tipo':'plan','mes':month,'clave':rid,'valor':val,'referencia':str(view.iloc[i]['Promotor'])})
+                    if changes:
+                        try:
+                            append_events(st.secrets,changes,username=editor_name)
+                            events_cached.clear();st.rerun()
+                        except Exception as exc:st.error('No se guardaron los planes: '+str(exc))
+                    else:st.info('No hay cambios para guardar.')
+        st.caption('El diagnóstico identifica el pilar que más contribuye a la brecha y sus tareas inválidas.')
+
+    if archived and plans:
+        with st.expander('Planes guardados al cierre (incluye promotores que superaron la meta)',expanded=False):
+            prom=summary[['bdrid','Promotor']].drop_duplicates('bdrid')
+            historical=pd.DataFrame([{'bdrid':bid,'Plan de acción':txt} for bid,txt in plans.items()])
+            historical=historical.merge(prom,on='bdrid',how='left')
+            table(historical[['Promotor','Plan de acción']],height=350)
+
+elif section == 'Fotografías':
+    st.subheader('Galería de evidencias')
+    if archived and not st.toggle('Habilitar fotografías del cierre',value=False,key=f'photos_closed_{month}'):
+        st.info('Las imágenes de los meses cerrados están desactivadas. Activá el interruptor para consultarlas.')
+    else:
+        mode=st.selectbox('Estado',['Todas','Inválida','Validada','Justificada'])
+        photos=f[(f['FotoURL'].fillna('')!='') & ((f['Estado']==mode) if mode!='Todas' else True)]
+        photos=photos.sort_values('Fecha_dt',ascending=False)
+        pages=max(1,(len(photos)+8)//9)
+        page=st.number_input('Página',min_value=1,max_value=pages,value=1,key='photo_page')
+        rows=photos.iloc[(page-1)*9:page*9]
+        st.caption(f'{n(len(photos))} fotografías disponibles · Página {page}/{pages}')
+        for i in range(0,len(rows),3):
+            c=st.columns(3)
+            for cell,(_,row) in zip(c,rows.iloc[i:i+3].iterrows()):
+                with cell:st.markdown(image_card(row['FotoURL'],row['Promotor'],row['Detalle Tarea'],row['Estado']),unsafe_allow_html=True)
+        if photos.empty:st.info('No hay fotos para estos filtros.')
+
+elif section == 'Cierre mensual':
+    st.subheader('Cierre mensual consolidado')
+    if archived:
+        st.success('Este mes ya tiene un cierre consolidado, leído desde un solo archivo.')
+        st.caption('Incluye tareas, tickets, relevamiento de anomalías, dictámenes, planes y objetivo a la fecha del cierre.')
+        st.caption('Para cambiar un plan después de cerrado se debe generar una nueva versión del cierre de forma explícita.')
+    elif manual is not None:
+        st.info('Para cerrar el mes, seleccioná una fuente de Drive en lugar de una previsualización manual.')
+    else:
+        st.markdown('El cierre genera **un solo archivo comprimido**. Las fotos no se descargan: conserva únicamente sus enlaces.')
+        st.warning('Antes de generarlo, revisá y guardá los planes y dictámenes pendientes. El cierre reflejará el estado registrado en ese momento.')
+        confirmed=st.checkbox('Confirmo que quiero generar una copia de cierre de este mes.')
         if not can_edit:
-            st.caption('Clasificaciones en modo lectura. Para guardar, configurá la conexión privada con Drive e ingresá la clave de editor en la barra lateral.')
-        st.caption('“Fraude” es un dictamen interno ingresado por una persona autorizada; el tablero no determina fraude automáticamente.')
-
-with action_plans_tab:
-    st.subheader('Objetivo mensual y planes de acción por promotor')
-    st.caption('Comparación por promotor con el objetivo guardado para el mes elegido. Un diagnóstico identifica el pilar que más aporta al desvío y las tareas que concentran las invalidaciones.')
-    if not months or manual is not None:
-        st.warning('Para guardar el objetivo y los planes, seleccioná un mes desde Drive; la previsualización manual no guarda datos.')
-    else:
-        prev=last_value(management_events,'objetivo',month) if management_events is not None else None
-        previous_goal=float(prev['valor']) if prev is not None and prev['valor'].replace('.','',1).isdigit() else None
-        top=st.columns([1,1,2])
-        with top[0]:
-            objective=st.number_input('Objetivo de validación (%)',min_value=0.0,max_value=100.0,
-                value=previous_goal,step=0.5,format='%.2f',key=f'monthly_target_{month}',
-                help='El objetivo se guarda por mes, nunca cambia la cifra oficial.')
-        with top[1]:
-            st.caption('Guardar valor mensual')
-            if st.button('Guardar objetivo en Drive',disabled=not can_edit or objective is None or management_events is None or not management_configured(st.secrets),
-                         use_container_width=True,key='save_target'):
-                try:
-                    append_events(st.secrets,[{'tipo':'objetivo','mes':month,'clave':'global','valor':objective}],username=editor_name)
-                    _management_events_cached.clear()
-                    st.success('Objetivo mensual guardado.');st.rerun()
-                except Exception as exc:st.error('No se guardó el objetivo: '+str(exc))
-        with top[2]:
-            official_or_estimated=st.radio('Resultado a comparar',
-                ['Oficial','Cierre proyectado'] if filtered_reviews is not None else ['Oficial'],
-                horizontal=True,key=f'action_compare_{month}')
-            st.caption('El proyectado suma solo fallas de algoritmo reconocidas y aún no incorporadas en BEES.')
-        if objective is None:
-            st.info('Ingresá el objetivo mensual arriba para identificar promotores bajo la meta. Sin objetivo no se calcula una brecha.')
-        else:
-            threshold=objective/100.0
-            use_projected=official_or_estimated=='Cierre proyectado'
-            people=promoter_summary(f,filtered_reviews,projected=use_projected)
-            below=people[(people['Resultado']<threshold) & people['Enviadas'].gt(0)].copy() if not people.empty else pd.DataFrame()
-            metrics=st.columns(4)
-            metrics[0].metric('Objetivo',f'{objective:.2f}%'.replace('.',','))
-            metrics[1].metric('Promotores debajo',number(len(below)))
-            metrics[2].metric('Promotores evaluados',number(len(people)))
-            metrics[3].metric('Brecha promedio (pp)',
-                f'{100*(threshold-below["Resultado"]).mean():.2f}'.replace('.',',') if not below.empty else '—')
-            if states or query or poc or variables or (date_selection and len(date_selection)==2 and
-                 (pd.Timestamp(date_selection[0])>df['Fecha_dt'].min() or pd.Timestamp(date_selection[1])<df['Fecha_dt'].max())):
-                st.warning('Hay filtros de estado, variable, fecha o búsqueda activos. Los porcentajes se calculan sobre ese subconjunto, no necesariamente sobre todas las tareas del mes.')
-            if not below.empty:
-                st.subheader('Promotores bajo objetivo · resultado y plan de acción')
-                stored_plans={}
-                if management_events is not None and not management_events.empty:
-                    x=management_events[(management_events['tipo']=='plan')&(management_events['mes']==month)]
-                    stored_plans={str(r['clave']):r['valor'] for _,r in x.drop_duplicates('clave',keep='last').iterrows()}
-                below['Brecha (pp)']=(threshold-below['Resultado'])*100
-                below['Plan de acción']=below['bdrid'].map(stored_plans).fillna('')
-                # El diagnóstico se compone en el mismo renglón de la tabla para actuar sin abrir otra vista.
-                explanations=[]
-                for bdr in below['bdrid']:
-                    d=diagnostic(f,bdr,threshold,filtered_reviews,projected=use_projected)
-                    explanations.append(d['texto'])
-                below['Diagnóstico']=explanations
-                view=below[['bdrid','Promotor','Supervisor','Enviadas','Validadas','Inválidas',
-                            'Justificadas','Recuperables','Resultado','Brecha (pp)','Diagnóstico','Plan de acción']].copy()
-                view['Resultado']=view['Resultado'].map(lambda x:f'{x*100:.2f}%'.replace('.',','))
-                view['Brecha (pp)']=view['Brecha (pp)'].map(lambda x:f'{x:+.2f}'.replace('.',','))
-                st.caption('Podés escribir o cambiar el plan directamente en la última columna. Los restantes campos son solo lectura. Las ediciones se conservan únicamente cuando presionás Guardar planes.')
-                with st.form('action_plan_table_form'):
-                    edited=st.data_editor(view,hide_index=True,use_container_width=True,
-                        num_rows='fixed',disabled=[c for c in view.columns if c!='Plan de acción'],
-                        column_config={'Plan de acción':st.column_config.TextColumn('Plan de acción',width='large',max_chars=12000),
-                                       'Diagnóstico':st.column_config.TextColumn('Causa principal',width='large')},
-                        height=min(650,90+len(view)*38),key=f'action_plan_grid_{month}')
-                    save_plans=st.form_submit_button('Guardar planes de acción en Drive',type='primary',
-                        disabled=not can_edit or management_events is None or not management_configured(st.secrets))
-                    if save_plans:
-                        changed=[]
-                        for i in range(len(edited)):
-                            bdr=str(view.iloc[i]['bdrid']);new=str(edited.iloc[i]['Plan de acción']).strip()
-                            if new!=stored_plans.get(bdr,'').strip():
-                                changed.append({'tipo':'plan','mes':month,'clave':bdr,'valor':new,
-                                                'referencia':str(view.iloc[i]['Promotor'])})
-                        if not changed:st.info('No hay planes modificados para guardar.')
-                        else:
-                            try:
-                                append_events(st.secrets,changed,username=editor_name)
-                                _management_events_cached.clear()
-                                st.success(f'{len(changed)} plan(es) guardado(s) en Drive.');st.rerun()
-                            except Exception as exc:st.error('No se pudieron guardar los planes: '+str(exc))
-                st.download_button('Exportar plan y diagnóstico (CSV)',
-                    view.to_csv(index=False,sep=';').encode('utf-8-sig'),
-                    file_name=f'BEES_planes_{month}.csv',mime='text/csv')
-                st.subheader('Detalle por pilar y tareas del promotor')
-                selected=st.selectbox('Analizar promotor',below['bdrid'].tolist(),
-                    format_func=lambda b:below.set_index('bdrid').loc[b,'Promotor']+' · '+b,key='action_detail_prom')
-                d=diagnostic(f,selected,threshold,filtered_reviews,projected=use_projected)
-                st.markdown(d['texto'])
-                pil_df=d['pilares'].copy()
-                pil_df['% Validación']=pil_df['Resultado usado']
-                display_table(pil_df[['Pilar de la Liga','Enviadas del cálculo','Validadas del cálculo',
-                                       'Inválidas','Justificadas','% Validación','Déficit neto (tareas)']].rename(columns={
-                                           'Enviadas del cálculo':'Enviadas','Validadas del cálculo':'Validadas'}),height=230)
-                top_tasks=d.get('tareas_criticas',pd.DataFrame())
-                if not top_tasks.empty:
-                    st.markdown('**Tareas con más invalidaciones del pilar que más aporta a la brecha**')
-                    display_table(top_tasks[['Variable de la Liga','Detalle Tarea','Enviadas (oficial)',
-                                             'Inválidas','Justificadas','% Invalidación']].head(8),height=320)
-            else:
-                st.success('No hay promotores por debajo del objetivo con los filtros aplicados.')
-            if not can_edit:st.caption('Para guardar objetivos o planes, ingresá la clave de editor en la barra lateral.')
-
-with details:
-    st.subheader('Detalle de tareas y exportación')
-    with st.expander('Definiciones de indicadores',expanded=False):
-        st.markdown('''
-- **Completada:** `Completada = 1`.
-- **Validada:** `Completada = 1` y `Validada = 1`.
-- **Inválida:** `Completada = 1` y `Validada = 0`. Esta es una interpretación operativa de la exportación; no se incluye la tarea no realizada.
-- **Justificada:** `Completada = 0` y `Justificacion = 1`.
-- **Pendiente:** `Completada = 0` y `Justificacion = 0`.
-- **BONUS:** tarea cuyo detalle contiene la palabra `BONUS`.
-- **Enviada oficial:** tarea estándar, o BONUS validada. Una BONUS inválida o justificada se excluye del denominador oficial, pero se conserva en el resto del tablero.
-- **% validación oficial:** validadas / enviadas oficiales (coincide con el 74,50 % del reporte oficial de septiembre 2026).
-- **% invalidación operativa:** inválidas / completadas. Incluye las BONUS inválidas para permitir su revisión.
-- **% justificación operativa:** justificadas / todas las tareas del Excel, incluidas las BONUS justificadas.
-
-Todas las métricas respetan los filtros globales. La fecha del reporte no implica que contenga todos los días del mes: se conservan los filtros aplicados en la fuente.
-''')
-    usecols=['Fecha_etiqueta','Distri/Directa','Canal Agrupado','Pilar de la Liga','Variable de la Liga','Detalle Tarea',
-             'Estado','Bonus_bool','Enviada_oficial_bool','Promotor','Supervisor','POC ID','Justificacion Motivo','Visita Valida','ID Tarea','FotoURL']
-    st.dataframe(f[usecols].rename(columns={'Fecha_etiqueta':'Fecha','FotoURL':'Foto (enlace)','Bonus_bool':'Es BONUS','Enviada_oficial_bool':'Cuenta en KPI oficial'}),use_container_width=True,height=530,hide_index=True,
-                 column_config={'Foto (enlace)':st.column_config.LinkColumn('Foto (enlace)',display_text='Abrir foto')})
-    export=f[usecols].rename(columns={'Fecha_etiqueta':'Fecha','FotoURL':'Foto (enlace)','Bonus_bool':'Es BONUS','Enviada_oficial_bool':'Cuenta en KPI oficial'})
-    st.download_button('Descargar tareas filtradas (CSV para Excel)',
-                       data=export.to_csv(index=False,sep=';',encoding='utf-8-sig').encode('utf-8-sig'),
-                       file_name='BEES_Force_tareas_filtradas.csv',mime='text/csv',type='primary')
-    with st.expander('Control de calidad de la fuente'):
-        st.write('Registros leídos:',number(quality['rows_in_export']))
-        st.write('Filas de notas/pie excluidas:',number(quality['footer_rows']))
-        st.write('ID Tarea duplicados consolidados:',number(quality['duplicate_ids_removed']))
-        st.write('Fechas no reconocidas:',number(quality['invalid_dates']))
-        st.write('Fotografías con enlace válido:',number(quality['image_count']))
-        st.write('Inconsistencias en los indicadores originales:',number(quality['inconsistent_status']))
-        if quality['origin_filter_description']:
-            st.markdown('**Filtros aplicados en el archivo de origen:**')
-            st.code(quality['origin_filter_description'],language=None)
-        if quality['inconsistent_status']:
-            st.warning('Se detectaron filas con indicadores contradictorios. Consultá la definición de estados y la exportación original.')
+            st.caption('Para generar un cierre, ingresá la clave de editor y tu nombre en el panel de acceso de arriba.')
+        if st.button('Preparar archivo de cierre',disabled=not confirmed or not can_edit):
+            try:
+                if not management_configured(st.secrets):
+                    raise RuntimeError('No se pudo verificar la conexión a la planilla de gestión. Se evita un cierre sin planes ni dictámenes.')
+                events_cached.clear()  # Obtener la versión más reciente antes de congelar.
+                ev=get_events()
+                rv=read_tickets()
+                av=read_anomalies_for_month(ev)
+                blob=build_snapshot(month,df,reviews=rv,anomalies=av,events=ev,
+                    sources={'tareas':source['name'],'tickets':'registrados si disponibles','anomalias':'reportes semanales del período'})
+                st.session_state['closure_package']=(month,blob)
+                st.success('Cierre preparado con los planes y anomalías disponibles.')
+            except Exception as exc:st.error('No se pudo preparar el cierre: '+str(exc))
+        pkg=st.session_state.get('closure_package')
+        if pkg and pkg[0]==month:
+            st.download_button('Descargar cierre para Drive',data=pkg[1],file_name=file_name(month),
+                mime='application/gzip',type='primary',disabled=not can_edit)
+            st.caption('Subí este archivo a la carpeta BEES Force en Drive. No sobrescribas el Excel original: el consolidado será la fuente preferida cuando vuelvas a elegir este mes.')
+        st.caption('Por las limitaciones de cuota de la cuenta de servicio, la subida del cierre a Mi unidad se hace manualmente.')
