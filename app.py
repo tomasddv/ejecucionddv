@@ -37,10 +37,14 @@ h2, h3 {letter-spacing:-.025em}
 [data-testid="stMetric"] {background:#fff;border:1px solid #e1e8f1;border-radius:16px;padding:16px;box-shadow:0 4px 20px #101d3209}
 [data-testid="stMetricLabel"] *, [data-testid="stMetricValue"] * {color:#111827 !important}
 .stButton button, .stDownloadButton button {border-radius:11px; border:1px solid #d4e0ef; background:#eff6ff; color:#111827}
-[data-baseweb="select"] > div, [data-baseweb="input"] > div {background:#fff !important;border:1px solid #d6e2ef !important;border-radius:12px !important}
+[data-baseweb="select"] > div, [data-baseweb="input"] > div {background:#fff !important;border:1px solid #d6e2ef !important;border-radius:12px !important; min-height:46px !important}
+[data-baseweb="select"] *, [data-baseweb="input"] *, [data-baseweb="popover"] *, [role="listbox"] *, [role="option"] * {color:#111827 !important}
+[data-baseweb="select"] svg, [data-baseweb="popover"] svg, [role="listbox"] svg {fill:#111827 !important; color:#111827 !important}
+[data-baseweb="popover"], [role="listbox"], ul[role="listbox"] {background:#ffffff !important; border:1px solid #d6e2ef !important; border-radius:12px !important}
+[role="option"] {background:#ffffff !important; color:#111827 !important}
+[role="option"][aria-selected="true"], [role="option"]:hover {background:#eef4fb !important; color:#111827 !important}
 [data-baseweb="tag"] {background:#e7f0fd !important;color:#153b67 !important; border-radius:20px !important}
 [data-baseweb="tag"] * {color:#153b67 !important}
-[data-baseweb="popover"] *, [role="listbox"] * {color:#111827 !important}
 .dash-table-wrap {border:1px solid #e3eaf3; background:#fff;border-radius:16px;padding:7px;box-shadow:0 4px 18px #1723340a;overflow:auto}
 .dash-table {border-collapse:separate;border-spacing:0;width:100%;font-size:.89rem}
 .dash-table th {position:sticky;top:0;background:#eef4fb;color:#18283c;text-align:left;padding:12px;white-space:nowrap;font-weight:750}
@@ -58,6 +62,12 @@ h2, h3 {letter-spacing:-.025em}
 
 def n(v): return f'{int(v):,}'.replace(',','.')
 def pct(v): return f'{float(v)*100:.1f}%'.replace('.',',')
+
+
+def label_day(value):
+    if value in (None, '', 'Todo el mes'):
+        return 'Todo el mes'
+    return pd.Timestamp(value).strftime('%d/%m/%Y')
 
 
 def table(frame, height=360):
@@ -233,18 +243,24 @@ if manual is None and not archived:
 st.caption(('🔒 Cierre consolidado' if archived else '● Mes en seguimiento')+' · '+month+' · '+source['name'])
 
 filter_opts=[('Canal (opcional)','Canal Agrupado'),('Pilar','Pilar de la Liga'),('Supervisor','Supervisor'),('Promotor','Promotor')]
-cols=st.columns(4)
+cols=st.columns(5)
 selections={}
-for col,(label,field) in zip(cols,filter_opts):
+for col,(label,field) in zip(cols[:4],filter_opts):
     with col:
         selections[field]=st.multiselect(label,sorted(df[field].fillna('').unique().tolist()),placeholder='Todos',key=f'flt_{month}_{field}')
+with cols[4]:
+    available_days=sorted(df['Fecha_dt'].dropna().dt.date.unique().tolist())
+    specific_day=st.selectbox('Día específico',['Todo el mes', *available_days],format_func=label_day,key=f'flt_{month}_specific_day')
+selected_dates=None if specific_day=='Todo el mes' else (specific_day, specific_day)
 
 f=filter_data(df,distributors=None,channels=selections['Canal Agrupado'],
               pillars=selections['Pilar de la Liga'],supervisors=selections['Supervisor'],
-              promoters=selections['Promotor'],variables=None,states=None,dates=None)
+              promoters=selections['Promotor'],variables=None,states=None,dates=selected_dates)
 if f.empty:
     st.warning('No hay tareas para los filtros seleccionados.');st.stop()
 s=stats(f)
+if specific_day != 'Todo el mes':
+    st.caption('Filtro de fecha activo: ' + label_day(specific_day))
 
 sections=['Resumen','Promotores','Revisiones','Anomalías','Planes de acción','Fotografías','Cierre mensual']
 section=st.radio('Sección',sections,horizontal=True,label_visibility='collapsed',key='selected_section')
@@ -318,6 +334,8 @@ elif section == 'Revisiones':
             (r['Promotor'].isin(selections['Promotor']) if selections['Promotor'] else True) &
             (r['Supervisor'].isin(selections['Supervisor']) if selections['Supervisor'] else True) &
             (r['Canal Agrupado'].isin(selections['Canal Agrupado']) if selections['Canal Agrupado'] else True)].copy()
+        if specific_day != 'Todo el mes' and 'Fecha_dt' in r.columns:
+            r = r[r['Fecha_dt'].dt.date.eq(specific_day)].copy()
         result=estimated_close(f,r);rm=review_metrics(r)
         m=st.columns(3)
         m[0].metric('Validación oficial',pct(result['porcentaje_oficial']))
@@ -337,7 +355,8 @@ elif section == 'Anomalías':
     else:
         a=filter_anomalies(anomalies,pillars=selections['Pilar de la Liga'],
             supervisors=selections['Supervisor'],promoters=selections['Promotor'],
-            channels=selections['Canal Agrupado'])
+            channels=selections['Canal Agrupado'],
+            dates=(specific_day, specific_day) if specific_day != 'Todo el mes' else None)
         m=st.columns(3)
         m[0].metric('Anomalías',n(len(a)))
         m[1].metric('Pendientes',n(a['Dictamen'].eq('Pendiente').sum()))
