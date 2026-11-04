@@ -329,51 +329,20 @@ def choose(by_month, month):
 
 
 def sync_planatareas(svc, by_month, fid, read_bytes=None):
-    """Mantiene una copia ACTUAL actualizada al leer planatareas.
+    """Compatibilidad: no crea copias en Mi unidad con cuenta de servicio.
 
-    De este modo un reemplazo de planatareas el primer día del mes siguiente no
-    destruye el respaldo del mes pasado. No modifica nunca un CIERRE.
+    Para respaldos automáticos usar Drive compartido con Google Workspace o OAuth
+    del propietario; la app usa solo lecturas de archivos existentes.
     """
-    from io import BytesIO
-    from googleapiclient.http import MediaIoBaseUpload
-    updates = []
-    for month, states in sorted(by_month.items()):
-        if states.get('CIERRE'):
-            continue
-        live = next((x for x in states.get('ACTUAL', []) if x.get('_origin') == 'planatareas'), None)
-        if live is None:
-            continue
-        stored = next((x for x in states.get('ACTUAL', []) if x.get('_origin') == 'canonica'), None)
-        if stored is None:
-            ext = Path(live['name']).suffix.lower()
-            target = f'BEES_FORCE_{month}_ACTUAL{ext}'
-            copied = svc.files().copy(fileId=live['id'], body={'name': target, 'parents': [fid]},
-                                      fields='id,name').execute()
-            updates.append('Respaldo '+copied['name'])
-        elif live.get('modifiedTime', '') > stored.get('modifiedTime', ''):
-            content = _bytes_for(live, svc, read_bytes)
-            mimetype = ('text/csv' if Path(live['name']).suffix.lower() == '.csv' else
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            media = MediaIoBaseUpload(BytesIO(content), mimetype=mimetype, resumable=False)
-            svc.files().update(fileId=stored['id'], media_body=media, fields='id,name').execute()
-            updates.append('Respaldo actualizado '+stored['name'])
-    return updates
+    return []
 
 
 def auto_close_old(svc, by_month, fid):
-    today = current_month()
-    made = []
-    for month, records in sorted(by_month.items()):
-        if month >= today or records.get('CIERRE') or not records.get('ACTUAL'):
-            continue
-        backup = next((f for f in records['ACTUAL'] if f.get('_origin') == 'canonica'), None)
-        src = backup or records['ACTUAL'][0]
-        ext = Path(src['name']).suffix.lower()
-        target = f'BEES_FORCE_{month}_CIERRE{ext}'
-        result = svc.files().copy(fileId=src['id'], body={'name': target, 'parents': [fid]},
-                                  fields='id,name').execute()
-        made.append(result['name'])
-    return made
+    """No crea cierres en Mi unidad: la cuenta de servicio carece de cuota.
+
+    Los archivos CIERRE ya existentes se mantienen y siguen teniendo prioridad.
+    """
+    return []
 
 
 def local_monthly_files(folder):
@@ -409,18 +378,12 @@ def local_review_files(folder):
 
 
 def auto_close_reviews(svc, by_month, fid):
-    today = current_month()
-    copied = []
-    for month, items in sorted(by_month.items()):
-        if month >= today or items.get('CIERRE') or not items.get('ACTUAL'):
-            continue
-        src = items['ACTUAL'][0]
-        ext = Path(src['name']).suffix.lower()
-        name = f'BEES_FORCE_REVISIONES_{month}_CIERRE{ext}'
-        result = svc.files().copy(fileId=src['id'], body={'name':name, 'parents':[fid]},
-                                  fields='id,name').execute()
-        copied.append(result['name'])
-    return copied
+    """No realiza files.copy de tickets; un Q4 contiene varias hojas mensuales.
+
+    Se consultan en lectura. Los cierres del ticket deben ser subidos por el
+    propietario o generados mediante credenciales OAuth autorizadas.
+    """
+    return []
 
 
 def _index_anomalies(files, svc=None, read_bytes=None):

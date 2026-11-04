@@ -11,7 +11,11 @@ from io import BytesIO
 
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import streamlit as st
+
+pio.templates.default = 'plotly_white'
+pio.templates['plotly_white'].layout.font.color = '#000000'
 
 from drive_source import service as drive_service, folder_id as drive_folder_id, list_monthly, choose, download, auto_close_old, sync_planatareas, current_month, local_monthly_files, list_reviews, local_review_files, auto_close_reviews, list_anomaly_reports, local_anomaly_reports
 
@@ -53,7 +57,39 @@ h3 {font-size: 1.1rem !important;}
 .photo-small {margin:.45rem 0 .2rem; font-size:.82rem; color:#475569;}
 .photo-task {font-size:.87rem; line-height:1.34; min-height:58px; max-height:85px; overflow:hidden; color:#19283a;}
 .status-pill {display:inline-block; font-size:.76rem; font-weight:700; padding:3px 9px; border-radius:100px; margin-right:6px;}
-.photo-action {font-size:.82rem; font-weight:700; color:#0f5fa8; text-decoration:underline;}
+.photo-action {font-size:.82rem; font-weight:700; color:#000; text-decoration:underline;}
+/* Fuente negra en toda la aplicación, incluyendo botones, etiquetas, mensajes,
+   widgets, menús flotantes, tarjetas HTML, tooltips y gráficos Plotly. */
+.stApp, .stApp :is(p, span, label, h1, h2, h3, h4, h5, h6, li, td, th, small, strong, em,
+  div, button, a, input, textarea, option, code, pre),
+[data-testid="stSidebar"] :is(p, span, label, h1, h2, h3, h4, h5, h6, div, button, a, input, textarea),
+[data-baseweb="popover"] *, [data-baseweb="menu"] *, [role="listbox"] *,
+[data-testid="stMetricLabel"] *, [data-testid="stMetricValue"] *,
+.js-plotly-plot svg text, .js-plotly-plot svg tspan,
+.stApp input::placeholder, .stApp textarea::placeholder { color: #000000 !important; }
+.stApp input, .stApp textarea,
+.stApp [data-baseweb="input"], .stApp [data-baseweb="select"],
+.stApp [data-baseweb="textarea"],
+[data-testid="stFileUploaderDropzone"],
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stDataFrame"], [data-testid="stDataEditor"],
+[data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"] {
+    background-color: #ffffff !important;
+}
+/* Los botones conservan contraste: fondo claro y letra negra. */
+.stApp :is(button, [data-baseweb="button"]),
+[data-testid="stSidebar"] :is(button, [data-baseweb="button"]) {
+    color: #000000 !important;
+    background-color: #e5effb !important;
+    border-color: #c5d3e6 !important;
+}
+.stApp button * { color: #000000 !important; }
+.stApp [data-testid="stTabs"] [role="tab"] {
+    color: #000000 !important;
+    background-color: #ffffff !important;
+}
+/* Evita el recuadro negro del cargador de archivos con texto negro invisible. */
+.stApp [data-testid="stFileUploaderDropzone"] {border: 1px dashed #9baec5 !important;}
 </style>
 ''', unsafe_allow_html=True)
 
@@ -139,7 +175,7 @@ def status_chart(grouped, key, heading, height=380, top=None):
                      xaxis_title='',yaxis_title='Cantidad de tareas',
                      legend_title='', legend=dict(orientation='h',y=1.12,x=0),
                      paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
-                     font=dict(color='#182334',size=12))
+                     font=dict(color='#000000',size=12))
     fig.update_xaxes(tickangle=-30, showgrid=False)
     fig.update_yaxes(gridcolor='#e8eef5')
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar':False})
@@ -155,7 +191,7 @@ def rank_chart(frame:pd.DataFrame, name_col:str, metric:str, heading:str, *, asc
     fig.update_traces(textposition='outside',cliponaxis=False)
     fig.update_layout(margin=dict(l=5,r=32,t=55,b=12),height=max(320,55+36*len(data)),
         paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
-        xaxis_title='Cantidad',yaxis_title='',font=dict(color='#182334'))
+        xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'))
     fig.update_xaxes(gridcolor='#e8eef5')
     st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
 
@@ -197,19 +233,10 @@ with st.sidebar:
     if drive is not None:
         try:
             folder = drive_folder_id(st.secrets)
+            # SOLO LECTURA de la carpeta Drive: las cuentas de servicio no tienen
+            # cuota de almacenamiento en Mi unidad. files.copy daba error 403.
+            # No se crea ningún cierre automáticamente con estas credenciales.
             availability = list_monthly(drive, folder, read_bytes=_download_from_drive_cached)
-            try:
-                backups = sync_planatareas(drive, availability, folder, read_bytes=_download_from_drive_cached)
-                if backups:
-                    st.caption('Copias mensuales actualizadas en Drive: ' + ', '.join(backups))
-                    availability = list_monthly(drive, folder, read_bytes=_download_from_drive_cached)
-            except Exception as exc:
-                st.warning('No se pudo actualizar el respaldo automático de planatareas. El mes sigue disponible, pero revisá los permisos de Drive: '+str(exc))
-            if any(m < current_month() and 'ACTUAL' in d and 'CIERRE' not in d for m,d in availability.items()):
-                auto_closed = auto_close_old(drive, availability, folder)
-                if auto_closed:
-                    availability = list_monthly(drive,folder,read_bytes=_download_from_drive_cached)
-                    st.success('Cierres automáticos: ' + ', '.join(auto_closed))
         except Exception as exc:
             st.error('Problema con la carpeta Drive: ' + str(exc))
             availability = {}
@@ -227,8 +254,11 @@ with st.sidebar:
         item = choose(availability,month)
         is_closed = bool(availability[month].get('CIERRE'))
         st.caption(('🔒 Cierre congelado' if is_closed else '🔄 Mes en curso / fuente ACTUAL') + f' · {item["name"]}')
-        if month != current and not is_closed:
-            st.warning('Este mes aún no tiene archivo CIERRE. Su contenido podría cambiar.')
+        if not is_closed:
+            if month != current:
+                st.warning('Este mes aún no tiene un CIERRE guardado. Su contenido podría cambiar. Guardá una copia de la bajada en Drive antes de reemplazarla.')
+            elif item.get('_origin') == 'planatareas':
+                st.caption('Sin cierre automático en Mi unidad: al finalizar el mes, conservá una copia de la bajada antes de reemplazar planatareas.xlsx.')
         if month != current and current not in availability:
             st.caption('Todavía no hay archivo para ' + current + '. Se muestra el último mes disponible.')
         try:
@@ -288,9 +318,8 @@ with st.sidebar:
         elif months and manual is None:
             if drive is not None:
                 r_availability = list_reviews(drive, folder, read_bytes=_download_from_drive_cached)
-                if any(m < current_month() and 'ACTUAL' in d and 'CIERRE' not in d for m,d in r_availability.items()):
-                    auto_close_reviews(drive, r_availability, folder)
-                    r_availability = list_reviews(drive, folder, read_bytes=_download_from_drive_cached)
+                # Los tickets Q4 son multimes. NO copiar el Excel trimestral:
+                # la lectura no debe crear un archivo en Mi unidad (error 403).
             else:
                 r_availability = local_review_files(Path(__file__).parent / 'data')
             if month in r_availability:
@@ -348,14 +377,37 @@ with st.sidebar:
     elif key_ok and not editor_name.strip():
         st.caption('Ingresá tu identificación para dejar constancia de quién hace los cambios.')
 
+# Diagnóstico de escritura: los datos de las tareas pueden leerse desde Drive
+# aunque Google Sheets API esté deshabilitada o falten permisos sobre «Eventos».
+management_error=None
 try:
-    if management_configured(st.secrets):
+    management_credentials_ready=management_configured(st.secrets)
+    if management_credentials_ready:
         management_events=_management_events_cached()
     else:
-        management_events=pd.DataFrame()
+        management_events=None
+        management_error='No hay una cuenta de servicio válida para Google Sheets.'
 except Exception as exc:
-    st.warning('No se pudo leer la bitácora de gestión de Drive: '+str(exc))
     management_events=None
+    management_error=str(exc)
+
+with st.sidebar:
+    st.markdown('**Estado del guardado**')
+    if management_error:
+        st.error('Guardado bloqueado: no se pudo leer la planilla de gestión. Revisá Google Sheets API y los permisos.')
+        # Los mensajes técnicos pueden contener IDs internos: solo para el editor autenticado.
+        if key_ok:
+            with st.expander('Ver detalle del error de Google Sheets'):
+                st.code(management_error,language=None)
+                st.caption('Comprobá Google Sheets API en Google Cloud, permiso Editor sobre la hoja de gestión y que Render use la clave JSON vigente.')
+    elif not secret:
+        st.error('Guardado bloqueado: falta BEES_EDITOR_PASSWORD en Render.')
+    elif not key_ok:
+        st.info('Para guardar: ingresá la clave de editor de Render en el campo superior.')
+    elif not editor_name.strip():
+        st.info('Para guardar: completá tu nombre o iniciales como revisor.')
+    else:
+        st.success('Google Sheets conectado y edición habilitada. Ya podés guardar dictámenes, objetivos y planes.')
 
 if months and manual is None:
     try:
@@ -459,7 +511,7 @@ with overview:
     with b:
         pie=px.pie(pd.DataFrame({'Estado':STATUS_ORDER,'Cantidad':[s['Validadas'],s['Inválidas'],s['Justificadas'],s['Pendientes']]}),
                    names='Estado',values='Cantidad',hole=.58,title='Composición total',color='Estado',color_discrete_map=STATUS_COLORS)
-        pie.update_layout(height=380,margin=dict(l=10,r=10,t=55,b=8),legend_title='',paper_bgcolor='rgba(0,0,0,0)',font=dict(color='#182334'))
+        pie.update_layout(height=380,margin=dict(l=10,r=10,t=55,b=8),legend_title='',paper_bgcolor='rgba(0,0,0,0)',font=dict(color='#000000'))
         st.plotly_chart(pie,use_container_width=True,config={'displayModeBar':False})
     st.subheader('Indicadores por pilar')
     display_table(by_pillar.sort_values('Tareas',ascending=False),height=220)
@@ -528,7 +580,7 @@ with actions:
             fig=px.bar(reasons.iloc[::-1],x='Justificaciones',y='Justificacion Motivo',orientation='h',
                        title='Motivos registrados',text='Justificaciones',color_discrete_sequence=['#d97706'])
             fig.update_layout(height=max(320,65+30*len(reasons)),margin=dict(l=10,r=22,t=48,b=5),
-                              xaxis_title='Cantidad',yaxis_title='',font=dict(color='#182334'),
+                              xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'),
                               paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
             fig.update_xaxes(gridcolor='#e8eef5')
             st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
@@ -596,7 +648,7 @@ with reviews_tab:
                    'Cantidad':[int(rview['Falla_algoritmo_bool'].sum()),int(rview['Invalida_confirmada_bool'].sum()),int(rview['Sin_dictamen_bool'].sum())]})
                 fig=px.bar(summary, x='Cantidad',y='Dictamen',orientation='h',text='Cantidad',
                     color='Dictamen',color_discrete_map=REVIEW_COLORS)
-                fig.update_layout(height=300,showlegend=False,margin=dict(l=8,r=18,t=12,b=8),font=dict(color='#182334'),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
+                fig.update_layout(height=300,showlegend=False,margin=dict(l=8,r=18,t=12,b=8),font=dict(color='#000000'),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
             with b:
                 st.markdown('**Por pilar**')
@@ -734,7 +786,7 @@ with action_plans_tab:
                 help='El objetivo se guarda por mes, nunca cambia la cifra oficial.')
         with top[1]:
             st.caption('Guardar valor mensual')
-            if st.button('Guardar objetivo en Drive',disabled=not can_edit or objective is None or management_events is None,
+            if st.button('Guardar objetivo en Drive',disabled=not can_edit or objective is None or management_events is None or not management_configured(st.secrets),
                          use_container_width=True,key='save_target'):
                 try:
                     append_events(st.secrets,[{'tipo':'objetivo','mes':month,'clave':'global','valor':objective}],username=editor_name)
@@ -788,7 +840,7 @@ with action_plans_tab:
                                        'Diagnóstico':st.column_config.TextColumn('Causa principal',width='large')},
                         height=min(650,90+len(view)*38),key=f'action_plan_grid_{month}')
                     save_plans=st.form_submit_button('Guardar planes de acción en Drive',type='primary',
-                        disabled=not can_edit or management_events is None)
+                        disabled=not can_edit or management_events is None or not management_configured(st.secrets))
                     if save_plans:
                         changed=[]
                         for i in range(len(edited)):
