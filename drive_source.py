@@ -233,10 +233,14 @@ def _list_files(svc, fid):
     result = []
     token = None
     while True:
-        response = svc.files().list(
-            q=f"'{fid}' in parents and trashed = false",
-            fields='nextPageToken,files(id,name,mimeType,modifiedTime,size)',
-            page_size=1000, page_token=token).execute()
+        request_params = {
+            'q': f"'{fid}' in parents and trashed = false",
+            'fields': 'nextPageToken,files(id,name,mimeType,modifiedTime,size)',
+            'pageSize': 1000,
+        }
+        if token:
+            request_params['pageToken'] = token
+        response = svc.files().list(**request_params).execute()
         result.extend(response.get('files', []))
         token = response.get('nextPageToken')
         if not token:
