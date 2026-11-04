@@ -18,7 +18,7 @@ from drive_source import (service as drive_service, folder_id as drive_folder_id
                           _list_files, _index_monthly, _index_reviews, _index_anomalies,
                           choose, current_month, local_monthly_files)
 from monthly_snapshot import (build_snapshot, load_snapshot, file_name, index_snapshots)
-from review_logic import load_review_source, prepare_reviews, reconcile_reviews, estimated_close, review_metrics
+from review_logic import load_review_source, prepare_reviews, reconcile_reviews, estimated_close, review_metrics, ranking_reviews
 from anomaly_logic import (read_anomalies, prepare_anomalies, combine_anomalies,
                            with_verdicts, filter_anomalies, ANOMALY_CHOICES)
 from action_plan_logic import promoter_summary, diagnostic
@@ -101,6 +101,35 @@ def chart(frame,key,title,*, horizontal=False):
     fig.update_xaxes(tickfont=dict(color='#111827'),title_font=dict(color='#111827'))
     fig.update_yaxes(tickfont=dict(color='#111827'),title_font=dict(color='#111827'))
     st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
+
+
+def promoter_rank_chart(frame, metric, heading, color, *, limit=14):
+    """Ranking de conteos absolutos; no incluye calculos de proyeccion."""
+    if frame is None or frame.empty or metric not in frame:
+        st.info('Sin datos de promotores para este ranking.')
+        return
+    data = frame.copy()
+    data[metric] = pd.to_numeric(data[metric], errors='coerce').fillna(0).astype(int)
+    if data[metric].sum() == 0:
+        st.info('No hay tareas en esta categoría para los filtros seleccionados.')
+        return
+    data = data.sort_values([metric, 'Promotor'], ascending=[False, True]).head(limit)
+    data['Etiqueta'] = data['Promotor'].fillna('Sin promotor').astype(str)
+    if data['Etiqueta'].duplicated().any():
+        data['Etiqueta'] = data['Etiqueta'] + ' · ' + data['Supervisor'].map(supervisor_label)
+    data = data.iloc[::-1]
+    fig = px.bar(data, x=metric, y='Etiqueta', orientation='h', text=metric,
+                 color_discrete_sequence=[color], hover_data={'Supervisor': True})
+    fig.update_traces(textposition='outside', cliponaxis=False, textfont=dict(color='#111827', size=12))
+    fig.update_layout(title=dict(text=heading, font=dict(color='#111827', size=17)),
+                      height=max(320, 85 + 34 * len(data)),
+                      margin=dict(l=12, r=36, t=56, b=22),
+                      font=dict(color='#111827', size=12), showlegend=False,
+                      xaxis_title='Cantidad de tareas', yaxis_title='',
+                      paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    fig.update_xaxes(gridcolor='#e2e8f0', rangemode='tozero', tickfont=dict(color='#111827'))
+    fig.update_yaxes(showgrid=False, automargin=True, tickfont=dict(color='#111827'))
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 
 def image_card(url,promoter,detail,subtitle=''):
@@ -310,25 +339,6 @@ s=stats(f)
 if specific_day != 'Todo el mes':
     st.caption('Filtro de fecha activo: ' + label_day(specific_day))
 
-review_lookup_task = {}
-review_lookup_photo = {}
-try:
-    reviews_for_display = read_tickets()
-    if reviews_for_display is not None and not getattr(reviews_for_display, 'empty', True):
-        if selections['Pilar de la Liga']:
-            reviews_for_display = reviews_for_display[reviews_for_display['Pilar de la Liga'].isin(selections['Pilar de la Liga'])]
-        if selections['Promotor']:
-            reviews_for_display = reviews_for_display[reviews_for_display['Promotor'].isin(selections['Promotor'])]
-        if selections['Supervisor']:
-            reviews_for_display = reviews_for_display[reviews_for_display['Supervisor'].isin(selections['Supervisor'])]
-        if selections['Canal Agrupado']:
-            reviews_for_display = reviews_for_display[reviews_for_display['Canal Agrupado'].isin(selections['Canal Agrupado'])]
-        if specific_day != 'Todo el mes' and 'Fecha_dt' in reviews_for_display.columns:
-            reviews_for_display = reviews_for_display[reviews_for_display['Fecha_dt'].dt.date.eq(specific_day)]
-        review_lookup_task, review_lookup_photo = build_review_lookup(reviews_for_display)
-except Exception:
-    review_lookup_task, review_lookup_photo = {}, {}
-
 sections=['Resumen','Promotores','Buscar cliente / PDV','Revisiones','Anomalías','Planes de acción','Fotografías','Cierre mensual']
 section=st.radio('Sección',sections,horizontal=True,label_visibility='collapsed',key='selected_section')
 
@@ -341,6 +351,29 @@ def read_tickets():
     item=choose(mapping,month)
     rows=parsed_review(item['name'],file_bytes(item['id'],item.get('modifiedTime','')),month)
     return reconcile_reviews(df,rows)
+
+
+# El cruce de tickets solo se necesita al ver fotografias; no cargarlo en el resumen.
+review_lookup_task = {}
+review_lookup_photo = {}
+if section in ('Fotografías', 'Buscar cliente / PDV'):
+    try:
+        review_rows_for_photos = read_tickets()
+        if review_rows_for_photos is not None and not review_rows_for_photos.empty:
+            if selections['Pilar de la Liga']:
+                review_rows_for_photos = review_rows_for_photos[review_rows_for_photos['Pilar de la Liga'].isin(selections['Pilar de la Liga'])]
+            if selections['Promotor']:
+                review_rows_for_photos = review_rows_for_photos[review_rows_for_photos['Promotor'].isin(selections['Promotor'])]
+            if selections['Supervisor']:
+                review_rows_for_photos = review_rows_for_photos[review_rows_for_photos['Supervisor'].isin(selections['Supervisor'])]
+            if selections['Canal Agrupado']:
+                review_rows_for_photos = review_rows_for_photos[review_rows_for_photos['Canal Agrupado'].isin(selections['Canal Agrupado'])]
+            if specific_day != 'Todo el mes':
+                review_rows_for_photos = review_rows_for_photos[review_rows_for_photos['Fecha_dt'].dt.date.eq(specific_day)]
+            review_lookup_task, review_lookup_photo = build_review_lookup(review_rows_for_photos)
+    except Exception:
+        # Un error del libro de tickets no debe bloquear el acceso a las tareas y fotos.
+        pass
 
 
 def get_events():
@@ -380,16 +413,27 @@ if section == 'Resumen':
     st.caption('Las BONUS no validadas se excluyen de enviadas oficiales; permanecen en el control operativo.')
 
 elif section == 'Promotores':
-    g=group_summary(f,['Supervisor','Promotor']).sort_values('% Validación',ascending=True)
-    c=st.columns(3)
-    c[0].metric('Promotores',n(g['Promotor'].nunique()))
-    c[1].metric('Pilar más débil',str(group_summary(f,'Pilar de la Liga').sort_values('% Validación').iloc[0]['Pilar de la Liga']))
-    c[2].metric('Inválidas',n(s['Inválidas']))
-    st.subheader('Resultados por promotor')
-    table(g[['Supervisor','Promotor','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=550)
-    with st.expander('Ver detalle por pilar'):
-        p=group_summary(f,['Promotor','Pilar de la Liga']).sort_values(['Promotor','% Validación'])
-        table(p[['Promotor','Pilar de la Liga','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=420)
+    st.subheader('Ranking oficial de promotores')
+    st.caption('Solo tareas computables para el indicador oficial (BONUS no validadas excluidas). Los rankings respetan el mes y los filtros superiores, incluido el pilar.')
+    official_tasks = f.loc[f['Enviada_oficial_bool']].copy()
+    official_grouped = group_summary(official_tasks, ['Supervisor','Promotor'])
+    if official_grouped.empty:
+        st.info('No hay tareas computables en los filtros seleccionados.')
+    else:
+        c1,c2=st.columns(2)
+        with c1:
+            promoter_rank_chart(official_grouped, 'Validadas', 'Más tareas validadas · Oficial', '#15803d')
+        with c2:
+            promoter_rank_chart(official_grouped, 'Inválidas', 'Más tareas inválidas · Oficial', '#dc2626')
+        with st.expander('Ver ranking oficial completo por promotor', expanded=True):
+            ranked=official_grouped.sort_values(['Validadas','Inválidas','Promotor'],ascending=[False,False,True]).copy()
+            ranked.insert(0, 'Puesto validación', ranked['Validadas'].rank(method='min',ascending=False).astype(int))
+            ranked.insert(1, 'Puesto invalidación', ranked['Inválidas'].rank(method='min',ascending=False).astype(int))
+            table(ranked[['Puesto validación','Puesto invalidación','Supervisor','Promotor','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=430)
+    with st.expander('Desglose oficial por pilar y promotor'):
+        by_pillar=group_summary(official_tasks,['Pilar de la Liga','Supervisor','Promotor'])
+        table(by_pillar.sort_values(['Pilar de la Liga','Validadas'],ascending=[True,False])[
+            ['Pilar de la Liga','Supervisor','Promotor','Enviadas (oficial)','Validadas','Inválidas','% Validación']],height=440)
 
 elif section == 'Buscar cliente / PDV':
     st.subheader('Consulta de tareas y fotografías por cliente')
@@ -484,7 +528,23 @@ elif section == 'Revisiones':
         m[1].metric('Fallas recuperables',n(result['recuperaciones_adicionales']))
         m[2].metric('Cierre proyectado',pct(result['porcentaje_estimado']))
         st.caption('La proyección solo suma fallas de algoritmo que todavía figuran inválidas. No altera el oficial.')
-        table(r[['Promotor','Pilar de la Liga','Detalle Tarea','Estado_revision','Conciliacion']].sort_values('Promotor'),height=440)
+        st.subheader('Ranking de promotores · Revisión de tickets')
+        st.caption('Falla de algoritmo e inválida confirmada son dictámenes del archivo de revisión. No reemplazan ni duplican las tareas validadas oficialmente. Se respetan los filtros superiores.')
+        by_promoter=ranking_reviews(r, ['Supervisor','Promotor'])
+        if by_promoter.empty:
+            st.info('No hay tickets de revisión en esta selección.')
+        else:
+            left,right=st.columns(2)
+            with left:
+                promoter_rank_chart(by_promoter, 'Fallas de algoritmo', 'Más fallas de algoritmo detectadas', '#0284c7')
+            with right:
+                promoter_rank_chart(by_promoter, 'Inválidas confirmadas', 'Más tareas realmente inválidas', '#dc2626')
+            st.caption('Las fallas ya validadas se muestran en el ranking de revisión, pero no suman de nuevo al cierre proyectado.')
+            with st.expander('Ver ranking de revisiones completo', expanded=True):
+                summary=by_promoter.sort_values(['Fallas de algoritmo','Inválidas confirmadas','Promotor'], ascending=[False,False,True]).copy()
+                table(summary[['Supervisor','Promotor','Tickets','Revisadas','Fallas de algoritmo','Inválidas confirmadas','Recuperables','Ya validadas','Sin dictamen']],height=460)
+        with st.expander('Ver tickets y conciliación por tarea'):
+            table(r[['Promotor','Pilar de la Liga','Detalle Tarea','Estado_revision','Conciliacion']].sort_values('Promotor'),height=440)
 
 elif section == 'Anomalías':
     st.subheader('Anomalías fotográficas · Distribuidora del Valle')
