@@ -127,12 +127,14 @@ def status_chart(grouped, key, heading, height=380, top=None):
         st.info('Sin datos para este segmento.'); return
     data=grouped.sort_values('Tareas', ascending=False)
     if top: data=data.head(top)
-    long = data.melt(id_vars=[key], value_vars=['Validadas','Inválidas','Justificadas','Pendientes'], var_name='Estado', value_name='Tareas')
+    # La tabla original ya contiene la columna agregada «Tareas».
+    # pandas.melt no permite que value_name coincida con una columna existente.
+    long = data.melt(id_vars=[key], value_vars=['Validadas','Inválidas','Justificadas','Pendientes'], var_name='Estado', value_name='Cantidad')
     long['Estado'] = long['Estado'].map({'Validadas':'Validada','Inválidas':'Inválida','Justificadas':'Justificada','Pendientes':'Pendiente'})
-    fig=px.bar(long, x=key, y='Tareas', color='Estado', title=heading, barmode='stack',
+    fig=px.bar(long, x=key, y='Cantidad', color='Estado', title=heading, barmode='stack',
                color_discrete_map=STATUS_COLORS,
                category_orders={'Estado':STATUS_ORDER},
-               hover_data={'Tareas':True})
+               hover_data={'Cantidad':True})
     fig.update_layout(height=height, margin=dict(l=12,r=10,t=55,b=20),
                      xaxis_title='',yaxis_title='Cantidad de tareas',
                      legend_title='', legend=dict(orientation='h',y=1.12,x=0),
