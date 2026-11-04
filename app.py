@@ -15,7 +15,10 @@ import plotly.io as pio
 import streamlit as st
 
 pio.templates.default = 'plotly_white'
-pio.templates['plotly_white'].layout.font.color = '#000000'
+tmpl = pio.templates['plotly_white']
+tmpl.layout.font.color = '#000000'
+tmpl.layout.title.font.color = '#000000'
+tmpl.layout.legend.font.color = '#000000'
 
 from drive_source import service as drive_service, folder_id as drive_folder_id, list_monthly, choose, download, auto_close_old, sync_planatareas, current_month, local_monthly_files, list_reviews, local_review_files, auto_close_reviews, list_anomaly_reports, local_anomaly_reports
 
@@ -42,13 +45,12 @@ st.markdown('''
 h1, h2, h3 {letter-spacing: -.02em;}
 h1 {font-size: 2rem !important;}
 h3 {font-size: 1.1rem !important;}
-[data-testid="stMetric"] {background: white; border: 1px solid #e2e8f0; border-radius: 13px; padding: 16px 12px; box-shadow: 0px 2px 10px #1e293b08;}
+[data-testid="stMetric"] {background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 12px; box-shadow: 0px 4px 14px #1e293b0b;}
 [data-testid="stMetricLabel"] * {color: #475569 !important; font-weight: 650;}
 [data-testid="stMetricValue"] * {color: #162436 !important; font-weight: 800;}
 [data-testid="stSidebar"] {border-right: 1px solid #dce5f1;}
-[data-testid="stDataFrame"] {border-radius: 10px; overflow: hidden;}
 .stTabs [data-baseweb="tab-list"] {gap: 8px;}
-.stTabs [data-baseweb="tab"] {background: #fff; border: 1px solid #e2e8f0; border-radius: 9px;}
+.stTabs [data-baseweb="tab"] {background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; color:#182334 !important;}
 .mini-note {color:#475569; font-size:.88rem; margin-bottom: .9rem;}
 .photo-card {background:#fff; border:1px solid #dde5ef; border-radius:13px; padding:10px; min-height:375px; box-shadow:0 1px 6px #12233a08;}
 .photo-thumb {height:220px; width:100%; background:#edf2f8; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden;}
@@ -58,8 +60,7 @@ h3 {font-size: 1.1rem !important;}
 .photo-task {font-size:.87rem; line-height:1.34; min-height:58px; max-height:85px; overflow:hidden; color:#19283a;}
 .status-pill {display:inline-block; font-size:.76rem; font-weight:700; padding:3px 9px; border-radius:100px; margin-right:6px;}
 .photo-action {font-size:.82rem; font-weight:700; color:#000; text-decoration:underline;}
-/* Fuente negra en toda la aplicación, incluyendo botones, etiquetas, mensajes,
-   widgets, menús flotantes, tarjetas HTML, tooltips y gráficos Plotly. */
+/* Fuente negra en toda la aplicación */
 .stApp, .stApp :is(p, span, label, h1, h2, h3, h4, h5, h6, li, td, th, small, strong, em,
   div, button, a, input, textarea, option, code, pre),
 [data-testid="stSidebar"] :is(p, span, label, h1, h2, h3, h4, h5, h6, div, button, a, input, textarea),
@@ -76,7 +77,6 @@ h3 {font-size: 1.1rem !important;}
 [data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"] {
     background-color: #ffffff !important;
 }
-/* Los botones conservan contraste: fondo claro y letra negra. */
 .stApp :is(button, [data-baseweb="button"]),
 [data-testid="stSidebar"] :is(button, [data-baseweb="button"]) {
     color: #000000 !important;
@@ -88,8 +88,67 @@ h3 {font-size: 1.1rem !important;}
     color: #000000 !important;
     background-color: #ffffff !important;
 }
-/* Evita el recuadro negro del cargador de archivos con texto negro invisible. */
 .stApp [data-testid="stFileUploaderDropzone"] {border: 1px dashed #9baec5 !important;}
+/* Filtros laterales más prolijos */
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] [data-baseweb="input"] > div {
+    border-radius: 14px !important;
+    border: 1px solid #d9e2ef !important;
+    background: #ffffff !important;
+    min-height: 46px !important;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04) !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: #e8f1ff !important;
+    border: 1px solid #bfd4f5 !important;
+    border-radius: 999px !important;
+    color: #17324f !important;
+    padding: 2px 8px !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="tag"] span {color:#17324f !important;}
+section[data-testid="stSidebar"] [data-baseweb="tag"] button {
+    background: transparent !important;
+    border: none !important;
+    min-height: auto !important;
+    padding: 0 0 0 4px !important;
+}
+section[data-testid="stSidebar"] [data-baseweb="tag"] svg,
+section[data-testid="stSidebar"] [data-baseweb="select"] svg {
+    fill: #334155 !important;
+    color: #334155 !important;
+}
+section[data-testid="stSidebar"] label {font-weight: 700 !important; color:#213247 !important;}
+/* Tablas tipo dashboard */
+.dash-table-card {
+    background: #ffffff;
+    border: 1px solid #dbe4f0;
+    border-radius: 18px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+    overflow: auto;
+    padding: 8px;
+}
+.dash-table {width: 100%; border-collapse: separate; border-spacing: 0; font-size: .92rem;}
+.dash-table thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: linear-gradient(180deg, #f3f7fc 0%, #edf3fa 100%);
+    color: #182334;
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid #dbe4f0;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.dash-table tbody td {
+    background: #ffffff;
+    color: #243447;
+    padding: 11px 14px;
+    border-bottom: 1px solid #edf2f7;
+    vertical-align: top;
+}
+.dash-table tbody tr:hover td {background: #f8fbff;}
+.dash-table tbody tr:last-child td {border-bottom: none;}
+.dash-table thead th:first-child {border-top-left-radius: 12px;}
+.dash-table thead th:last-child {border-top-right-radius: 12px;}
 </style>
 ''', unsafe_allow_html=True)
 
@@ -154,8 +213,11 @@ def percent(v): return f'{100 * v:.1f}%'.replace('.', ',')
 def display_table(frame: pd.DataFrame, *, height=400):
     frame = frame.copy()
     for c in ['% Validación','% Invalidación','% Justificación','% fallas entre revisadas']:
-        if c in frame.columns: frame[c] = frame[c].map(percent)
-    st.dataframe(frame, use_container_width=True, height=height, hide_index=True)
+        if c in frame.columns:
+            frame[c] = frame[c].map(percent)
+    frame = frame.fillna('')
+    html_table = frame.to_html(index=False, escape=True, classes='dash-table')
+    st.markdown(f'<div class="dash-table-card" style="max-height:{height}px">{html_table}</div>', unsafe_allow_html=True)
 
 
 def status_chart(grouped, key, heading, height=380, top=None):
@@ -173,7 +235,8 @@ def status_chart(grouped, key, heading, height=380, top=None):
                hover_data={'Cantidad':True})
     fig.update_layout(height=height, margin=dict(l=12,r=10,t=55,b=20),
                      xaxis_title='',yaxis_title='Cantidad de tareas',
-                     legend_title='', legend=dict(orientation='h',y=1.12,x=0),
+                     title=dict(text=heading, font=dict(color='#000000', size=20)),
+                     legend_title='', legend=dict(orientation='h',y=1.12,x=0, font=dict(color='#000000')),
                      paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
                      font=dict(color='#000000',size=12))
     fig.update_xaxes(tickangle=-30, showgrid=False)
@@ -190,6 +253,7 @@ def rank_chart(frame:pd.DataFrame, name_col:str, metric:str, heading:str, *, asc
                text=metric,color_discrete_sequence=[('#dc2626' if metric=='Inválidas' else '#15803d')])
     fig.update_traces(textposition='outside',cliponaxis=False)
     fig.update_layout(margin=dict(l=5,r=32,t=55,b=12),height=max(320,55+36*len(data)),
+        title=dict(text=heading, font=dict(color='#000000', size=20)),
         paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'))
     fig.update_xaxes(gridcolor='#e8eef5')
@@ -511,7 +575,8 @@ with overview:
     with b:
         pie=px.pie(pd.DataFrame({'Estado':STATUS_ORDER,'Cantidad':[s['Validadas'],s['Inválidas'],s['Justificadas'],s['Pendientes']]}),
                    names='Estado',values='Cantidad',hole=.58,title='Composición total',color='Estado',color_discrete_map=STATUS_COLORS)
-        pie.update_layout(height=380,margin=dict(l=10,r=10,t=55,b=8),legend_title='',paper_bgcolor='rgba(0,0,0,0)',font=dict(color='#000000'))
+        pie.update_layout(height=380,margin=dict(l=10,r=10,t=55,b=8),title=dict(text='Composición total', font=dict(color='#000000', size=20)), legend_title='', legend=dict(font=dict(color='#000000')), paper_bgcolor='rgba(0,0,0,0)',font=dict(color='#000000'))
+        pie.update_traces(textfont_color='#ffffff', textfont_size=16)
         st.plotly_chart(pie,use_container_width=True,config={'displayModeBar':False})
     st.subheader('Indicadores por pilar')
     display_table(by_pillar.sort_values('Tareas',ascending=False),height=220)
@@ -580,6 +645,7 @@ with actions:
             fig=px.bar(reasons.iloc[::-1],x='Justificaciones',y='Justificacion Motivo',orientation='h',
                        title='Motivos registrados',text='Justificaciones',color_discrete_sequence=['#d97706'])
             fig.update_layout(height=max(320,65+30*len(reasons)),margin=dict(l=10,r=22,t=48,b=5),
+                              title=dict(text='Motivos registrados', font=dict(color='#000000', size=20)),
                               xaxis_title='Cantidad',yaxis_title='',font=dict(color='#000000'),
                               paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
             fig.update_xaxes(gridcolor='#e8eef5')
@@ -649,6 +715,7 @@ with reviews_tab:
                 fig=px.bar(summary, x='Cantidad',y='Dictamen',orientation='h',text='Cantidad',
                     color='Dictamen',color_discrete_map=REVIEW_COLORS)
                 fig.update_layout(height=300,showlegend=False,margin=dict(l=8,r=18,t=12,b=8),font=dict(color='#000000'),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
+                fig.update_traces(textfont_color='#000000')
                 st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
             with b:
                 st.markdown('**Por pilar**')
