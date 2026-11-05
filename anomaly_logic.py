@@ -10,7 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
 import pandas as pd
-from bees_logic import valid_photo_url, _parse_dates
+from bees_logic import valid_photo_url, _parse_dates, fill_missing_pillars
 
 DDV_ID = '70549'
 DDV_NAME = 'DISTRIBUIDORA DEL VALLE S.A.'
@@ -112,9 +112,10 @@ def enrich_anomalies(rows, base):
         merged[col]=merged[col].fillna(merged[col+'_por_bdr']).fillna('Sin identificar')
     merged=merged.drop(columns=['Promotor_por_bdr','Supervisor_por_bdr'])
     # No inventar métricas, canales o estados cuando no se encontró la tarea.
-    for col in ['Pilar de la Liga','Variable de la Liga','Canal Agrupado','Estado']:
+    for col in ['Variable de la Liga','Canal Agrupado','Estado']:
         merged[col]=merged[col].fillna('No disponible')
-    merged['Pilar de la Liga']=merged['Pilar de la Liga'].where(merged['Pilar de la Liga'].ne('No disponible'),merged['Detalle Tarea'].str.extract(r'^\s*([A-Za-zÁÉÍÓÚ]+):',expand=False).fillna('No disponible').str.upper())
+    merged['Pilar de la Liga']=merged['Pilar de la Liga'].fillna('')
+    merged=fill_missing_pillars(merged)
     merged['Fecha_etiqueta']=merged['Fecha_dt'].dt.strftime('%d/%m/%Y').fillna('Sin fecha')
     return merged
 

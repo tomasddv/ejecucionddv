@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
-from bees_logic import _parse_dates, valid_photo_url, stats
+from bees_logic import _parse_dates, valid_photo_url, stats, fill_missing_pillars
 from drive_source import months_from_name, year_from_quarter_name
 
 STATUS_REVIEW = ['Falla de algoritmo', 'Inválida confirmada', 'Sin dictamen']
@@ -132,6 +132,7 @@ def reconcile_reviews(base, reviews):
         result[k]=result[b].fillna('').astype(str).str.strip()
         is_blank=result[k].eq('')
         result.loc[is_blank,k]=result.loc[is_blank,t].fillna('').astype(str).str.strip()
+    result = fill_missing_pillars(result)
     result['Supervisor']=result.get('Supervisor',pd.Series(index=result.index,dtype=str)).fillna('').astype(str).str.strip()
     result.loc[result['Supervisor'].eq(''),'Supervisor']=result.loc[result['Supervisor'].eq(''),'Supervisor ID'].apply(lambda s:'Supervisor '+str(s) if str(s) else 'Sin supervisor')
     result['Fecha_dt']=result['Fecha_dt'].combine_first(result['Fecha_ticket_dt'])

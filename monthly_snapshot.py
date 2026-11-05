@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import pandas as pd
+from bees_logic import fill_missing_pillars
 
 SNAPSHOT_RE = re.compile(r'^BEES_FORCE_CIERRE_(20\d{2}-(?:0[1-9]|1[0-2]))\.json\.gz$', re.I)
 SNAPSHOT_VERSION = 1
@@ -24,7 +25,7 @@ def month_for_name(name):
 
 TASK_FIELDS = [
     'ID Tarea','Fecha_dt','Distri/Directa','Promotor','Supervisor','bdrid',
-    'Pilar de la Liga','Canal Agrupado','Variable de la Liga','Detalle Tarea',
+    'Pilar de la Liga','Pilar_fuente','Pilar_inferido_bool','Canal Agrupado','Variable de la Liga','Detalle Tarea',
     'Estado','FotoURL','POC ID','Justificacion Motivo','Completada_bool',
     'Validada_bool','Invalida_bool','Justificada_bool','Pendiente_bool',
     'Bonus_bool','Bonus_excluida_bool','Enviada_oficial_bool',
@@ -72,13 +73,18 @@ def _restore_frame(rows, *, kind):
         if date_field in frame:
             frame[date_field] = pd.to_datetime(frame[date_field], errors='coerce')
     if kind == 'tasks':
+        frame = fill_missing_pillars(frame)
         bool_fields = ('Completada_bool','Validada_bool','Invalida_bool','Justificada_bool',
-                       'Pendiente_bool','Bonus_bool','Bonus_excluida_bool','Enviada_oficial_bool')
+                       'Pendiente_bool','Bonus_bool','Bonus_excluida_bool','Enviada_oficial_bool',
+                       'Pilar_inferido_bool','Pilar_sin_identificar_bool')
     elif kind == 'reviews':
+        frame = fill_missing_pillars(frame)
         bool_fields = ('Recuperable_bool','Ya_validada_bool','Falla_algoritmo_bool',
                        'Invalida_confirmada_bool','Sin_dictamen_bool','Revisada_bool',
                        'Bonus_excluida_bool','Enviada_oficial_bool','Coincide_fuente_bool')
     else:
+        if kind == 'anomalies':
+            frame = fill_missing_pillars(frame)
         bool_fields = ('Coincide_tarea',)
     for col in bool_fields:
         if col in frame:

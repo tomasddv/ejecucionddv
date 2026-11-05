@@ -69,3 +69,14 @@ Subir `planatareas.xlsx`, el libro trimestral de tickets y los Excel semanales d
 ### Actualización mínima
 
 Si ya instalaste el buscador de PDV y todas las dependencias, **reemplazá únicamente `app.py` en la raíz de GitHub**. No es necesario cambiar Drive, Render ni las variables de entorno. El paquete de actualización incluye `pdv_search.py` como respaldo para evitar el error de módulo faltante; `monthly_snapshot.py` debe mantenerse en la raíz.
+
+## Reparación de pilares faltantes (noviembre 2026)
+
+La bajada de noviembre llega con la columna `Pilar de la Liga` vacía en algunas tareas, aunque `Detalle Tarea` trae un prefijo identificable.
+
+- **Regla automática (solo si falta el pilar):** `DISPO:` / `DISPONIBILIDAD:` → `DISPONIBILIDAD`; `FRIO:` / `FRÍO:` / `ON|FRÍO:` → `FRIO`; `PRECIO:` → `PRECIO`.
+- También se reconocen prefijos ON documentados en meses anteriores: `ON|PROMO:` → `PRECIO`; `ON|NABS:`, `ON|AGUAS:`, `ON|SKUS X POC:`, `ON|MEGABRAND:`, `ON|BC:` y `ON|MKTP:` → `DISPONIBILIDAD`.
+- Cuando el encabezado no se reconoce, se marca `Sin pilar identificado`; nunca se clasifica por una palabra suelta dentro del cuerpo de la tarea.
+- El Excel de Drive queda intacto. La normalización se aplica al cargar datos, al conciliar los tickets y anomalías y al abrir un cierre histórico.
+- `Pilar_fuente` conserva el valor exportado por BEES y `Pilar_inferido_bool` distingue las tareas clasificadas por la aplicación; no alteran el estado, el resultado oficial ni el cierre proyectado.
+- **Actualización de un repositorio ya funcional:** reemplazar `bees_logic.py`, `review_logic.py`, `anomaly_logic.py` y `monthly_snapshot.py` desde el parche. `app.py` y las variables de Render no cambian. Deploy automático o `Manual Deploy → Deploy latest commit`.

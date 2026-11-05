@@ -33,6 +33,69 @@ def _normalise_text(s: str) -> str:
     return ''.join(c for c in t if not unicodedata.combining(c))
 
 
+# BEES suele enviar el pilar vacío en noviembre aunque la tarea lo explicita
+# en su encabezado (DISPO:, FRIO:, PRECIO:). Estas reglas no tocan el Excel.
+UNKNOWN_PILLAR = 'Sin pilar identificado'
+PILLAR_PREFIXES = {
+    'DISPO': 'DISPONIBILIDAD',
+    'DISPONIBILIDAD': 'DISPONIBILIDAD',
+    'FRIO': 'FRIO',
+    'PRECIO': 'PRECIO',
+}
+# Tipos ON constatados en los archivos del distribuidor de septiembre/octubre.
+# Ante un prefijo ON nuevo, preferimos no adivinar el pilar.
+ON_PREFIXES = {
+    'PROMO': 'PRECIO',
+    'SKUS X POC': 'DISPONIBILIDAD',
+    'MEGABRAND': 'DISPONIBILIDAD',
+    'AGUAS': 'DISPONIBILIDAD',
+    'NABS': 'DISPONIBILIDAD',
+    'BC': 'DISPONIBILIDAD',
+    'MKTP': 'DISPONIBILIDAD',
+}
+EMPTY_PILLARS = {'', 'NAN', 'NULL', 'NONE', 'N/A', 'NO DISPONIBLE',
+                 'SIN PILAR', 'SIN PILAR IDENTIFICADO', 'S/P'}
+
+
+def _is_missing_pillar(value) -> bool:
+    return _normalise_text(value).upper() in EMPTY_PILLARS
+
+
+def infer_pillar_from_description(description: str) -> str | None:
+    """Clasifica solo encabezados inequívocos; nunca por una palabra en el cuerpo."""
+    text = _normalise_text(description).upper()
+    text = re.sub(r'\s+', ' ', text).strip()
+    if text.startswith('ON|') or re.match(r'^ON\s*\|', text):
+        head = re.sub(r'^ON\s*\|\s*', '', text).split(':', 1)[0].strip()
+        return PILLAR_PREFIXES.get(head) or ON_PREFIXES.get(head)
+    m = re.match(r'^(?:PILAR\s+)?(DISPONIBILIDAD|DISPO|FRIO|PRECIO)(?=\s|:|\||-|$)', text)
+    return PILLAR_PREFIXES[m.group(1)] if m else None
+
+
+def fill_missing_pillars(frame: pd.DataFrame) -> pd.DataFrame:
+    """Completa el pilar desde el inicio de la descripción y conserva el valor fuente.
+
+    No modifica estados ni indicadores oficiales, solo la dimensión de segmentación.
+    """
+    result = frame.copy()
+    if 'Pilar de la Liga' not in result or 'Detalle Tarea' not in result:
+        return result
+    if 'Pilar_fuente' not in result:
+        result['Pilar_fuente'] = result['Pilar de la Liga'].fillna('').astype(str).str.strip()
+    raw = result['Pilar de la Liga'].fillna('').astype(str).str.strip()
+    normalized = raw.map(lambda x: _normalise_text(x).upper())
+    # Unificar grafías, pero conservar toda clasificación ya informada por BEES.
+    result['Pilar de la Liga'] = normalized.map(PILLAR_PREFIXES).fillna(raw)
+    needs_inference = raw.map(_is_missing_pillar)
+    if needs_inference.any():
+        inferred = result.loc[needs_inference, 'Detalle Tarea'].map(infer_pillar_from_description)
+        result.loc[needs_inference, 'Pilar de la Liga'] = inferred.fillna(UNKNOWN_PILLAR)
+    source_missing = result['Pilar_fuente'].map(_is_missing_pillar)
+    result['Pilar_inferido_bool'] = source_missing & result['Pilar de la Liga'].isin(PILLAR_PREFIXES.values())
+    result['Pilar_sin_identificar_bool'] = result['Pilar de la Liga'].eq(UNKNOWN_PILLAR)
+    return result
+
+
 def _parse_dates(col: pd.Series) -> pd.Series:
     """Fechas ISO/Excel; evita el overflow de pandas con columnas sin seriales."""
     numeric = pd.to_numeric(col, errors='coerce')
@@ -86,6 +149,7 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.drop_duplicates(subset=['ID Tarea'], keep='last')
     for c in REQUIRED_COLUMNS + OPTIONAL_COLUMNS:
         if c != 'Fecha': df[c] = df[c].fillna('').astype(str).str.strip()
+    df = fill_missing_pillars(df)
     df['Fecha_dt'] = _parse_dates(df['Fecha'])
     a = _is_one(df['Completada'])
     b = _is_one(df['Validada'])
@@ -116,6 +180,8 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         'duplicate_ids_removed': dup_count,
         'invalid_dates': int(df['Fecha_dt'].isna().sum()),
         'image_count': int(df['FotoURL'].ne('').sum()),
+        'pillars_recovered': int(df['Pilar_inferido_bool'].sum()),
+        'pillars_unknown': int(df['Pilar_sin_identificar_bool'].sum()),
         'origin_filter_description': origin_filters[0] if origin_filters else '',
         'inconsistent_status': int((b & (~a)).sum() + (a & j).sum()),
     }
